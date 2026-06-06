@@ -1,0 +1,8 @@
+[submodule "DataManager"]
+	path = DataManager
+	url = https://github.com/rud472888-creator/DataManager.git
+	branch = codex/runtime-standard-video-offload
+[submodule "DataHelper"]
+	path = DataHelper
+	url = https://github.com/rud472888-creator/DataHelper.git
+	branch = codex/report-output-quality

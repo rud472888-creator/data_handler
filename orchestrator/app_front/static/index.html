@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Data Handler</title>
+    <link rel="stylesheet" href="/static/styles.css?v=service-ui-eject-bare">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Workspace navigation">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">DIT</div>
+          <div class="brand-copy">
+            <span class="brand-title">Data Handler</span>
+            <span class="brand-subtitle" id="runtimeState">Checking runtime</span>
+          </div>
+        </div>
+
+        <nav class="nav-section" aria-label="Primary">
+          <button class="nav-row is-active" id="projectsNav" type="button" data-view="projects" aria-current="page">
+            <span class="nav-icon" aria-hidden="true">P</span>
+            <span>Projects</span>
+            <span class="nav-meta" id="projectsMeta">0</span>
+          </button>
+          <button class="nav-row" id="sourcesNav" type="button" data-view="sources">
+            <span class="nav-icon" aria-hidden="true">S</span>
+            <span>Sources</span>
+            <span class="nav-meta" id="sourcesMeta">0</span>
+          </button>
+          <button class="nav-row" id="runsNav" type="button" data-view="runs">
+            <span class="nav-icon" aria-hidden="true">R</span>
+            <span>Runs</span>
+            <span class="nav-meta" id="runsMeta">0</span>
+          </button>
+        </nav>
+
+        <div class="nav-section utility-section">
+          <button class="nav-row utility-row" id="runtimeNav" type="button" data-view="runtime">
+            <span class="status-dot" id="sidebarStatusDot" data-state="running" aria-hidden="true"></span>
+            <span>Runtime</span>
+            <span class="nav-meta" id="sidebarServerState">Running</span>
+          </button>
+        </div>
+
+        <section class="disk-card" aria-label="Mounted disks">
+          <div class="disk-card-head">
+            <span>Mounted Disks</span>
+            <div class="disk-card-actions">
+              <span id="diskSummary">Checking</span>
+              <button class="icon-button disk-refresh-button" id="importSourceButton" type="button" aria-label="Refresh sources and mounted disks" title="Refresh sources and mounted disks">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M20 6v5h-5"></path>
+                  <path d="M4 18v-5h5"></path>
+                  <path d="M18.3 9A7 7 0 0 0 6.7 6.3L4 9"></path>
+                  <path d="M5.7 15A7 7 0 0 0 17.3 17.7L20 15"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="disk-list" id="diskList" aria-live="polite">
+            <div class="disk-empty">Checking mounted volumes...</div>
+          </div>
+        </section>
+
+        <div class="sidebar-footer">
+          <button class="nav-row" id="footerSettingsButton" type="button">
+            <span class="nav-icon" aria-hidden="true">G</span>
+            <span>Settings</span>
+          </button>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <header class="workspace-toolbar">
+          <div class="toolbar-title">
+            <h1>Replication Workspace</h1>
+            <p>Confirm project paths, mounted sources, and launch Data Manager runs.</p>
+          </div>
+          <div class="toolbar-actions">
+            <button class="button primary" id="startReplicationButton" type="button">Start Replication</button>
+          </div>
+        </header>
+        <div class="app-alert-list" id="appErrorList" role="alert" aria-live="assertive" hidden></div>
+
+        <section class="content-grid" aria-label="Project overview">
+          <div class="overview-column">
+            <article class="panel primary-panel" id="activeProjectPanel" data-view-section="projects sources" tabindex="-1">
+              <div class="panel-heading">
+                <div>
+                  <h2>Active Project</h2>
+                  <p>Confirm source and replica paths before starting a run.</p>
+                </div>
+                <button class="button subtle" id="reviewProjectButton" type="button">New / Review</button>
+              </div>
+              <label class="project-switcher">Project
+                <select id="projectSwitcher" aria-label="Active project"></select>
+              </label>
+              <div class="placeholder-stack">
+                <div class="field-row">
+                  <span class="field-label">Source</span>
+                  <span class="field-value muted" id="activeSource">No source selected</span>
+                </div>
+                <div class="field-row">
+                  <span class="field-label">Replicas</span>
+                  <span class="field-value muted" id="activeReplicas">No project selected</span>
+                </div>
+                <div class="field-row">
+                  <span class="field-label">Project</span>
+                  <span class="field-value muted" id="activeProject">Create or select a project</span>
+                </div>
+              </div>
+            </article>
+
+            <article class="panel operations-panel" id="progressPanel" data-view-section="projects runtime runs" tabindex="-1">
+              <div class="panel-heading compact">
+                <h2>Overall Progress</h2>
+                <span class="activity-state" id="overallState">Standby</span>
+              </div>
+
+              <div class="overall-progress">
+                <div class="clip-progress-row">
+                  <div class="clip-progress-copy">
+                    <strong id="overallTitle">Pipeline waiting</strong>
+                    <span id="overallSubtitle">No replication run is active.</span>
+                  </div>
+                  <span class="clip-progress-value" id="overallPercent">0%</span>
+                </div>
+                <div class="progress-track" id="overallProgressbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Overall replication progress">
+                  <span id="overallBar" style="width: 0%"></span>
+                </div>
+                <div class="progress-metrics" aria-label="Overall backup metrics">
+                  <span><strong id="copiedMetric">0</strong> files</span>
+                  <span><strong id="verifiedMetric">0</strong> replicas</span>
+                  <span><strong id="reportsMetric">0</strong> reports</span>
+                </div>
+              </div>
+
+              <div class="report-log" aria-label="Recent report log">
+                <div class="backup-section-head">
+                  <span>Recent Reports</span>
+                  <span>Checksum / Manifest / Clip Verification</span>
+                </div>
+                <div class="report-log-grid">
+                  <section class="report-column" aria-label="Checksum reports">
+                    <h3>Checksum / Manifest</h3>
+                    <ul class="report-list" id="checksumReportList">
+                      <li><span class="report-dot" data-state="idle" aria-hidden="true"></span><span>No checksum report yet</span><time>--</time></li>
+                    </ul>
+                  </section>
+                  <section class="report-column" aria-label="Clip verification reports">
+                    <h3>Clip Verification</h3>
+                    <ul class="report-list" id="clipReportList">
+                      <li><span class="report-dot" data-state="idle" aria-hidden="true"></span><span>No clip validation report yet</span><time>--</time></li>
+                    </ul>
+                  </section>
+                </div>
+              </div>
+            </article>
+          </div>
+
+          <div class="overview-column">
+            <article class="panel" id="recentRunsPanel" data-view-section="projects runs" tabindex="-1">
+              <div class="panel-heading compact">
+                <h2>Recent Runs</h2>
+                <button class="text-button" id="viewRunsButton" type="button">Refresh</button>
+              </div>
+              <div class="empty-list" id="recentRunsList">
+                <span class="empty-title">No runs yet</span>
+                <span class="empty-copy">Run records will appear after replication starts.</span>
+              </div>
+            </article>
+
+            <article class="panel backup-panel" id="backupPanel" data-view-section="projects runtime runs" tabindex="-1">
+              <div class="panel-heading compact">
+                <h2>Backup Activity</h2>
+                <span class="activity-state" id="backupState">Idle</span>
+              </div>
+
+              <div class="backup-section">
+                <div class="backup-section-head">
+                  <span>Clip Progress</span>
+                  <span id="activeClipCount">0 active</span>
+                </div>
+                <div class="clip-progress-list" aria-label="Clip backup progress">
+                  <div class="clip-progress-row">
+                    <div class="clip-progress-copy">
+                      <strong id="clipProgressTitle">No active backup</strong>
+                      <span id="clipProgressSubtitle">Clip-level progress will appear during replication.</span>
+                    </div>
+                    <span class="clip-progress-value" id="clipProgressPercent">0%</span>
+                  </div>
+                  <div class="progress-track" id="clipProgressbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Current clip backup progress">
+                    <span id="clipProgressBar" style="width: 0%"></span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="backup-section">
+                <div class="backup-section-head">
+                  <span>Recent Completed</span>
+                  <span>Last 4 clips</span>
+                </div>
+                <ol class="completion-list" id="completionList" aria-label="Recently completed backup clips"></ol>
+              </div>
+            </article>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <dialog id="projectDialog" aria-labelledby="projectDialogTitle">
+      <form id="projectForm" method="dialog" class="dialog-card">
+        <h2 id="projectDialogTitle">Create Project</h2>
+        <label class="form-field">Name <input name="name" required autocomplete="off" aria-describedby="projectNameHint"></label>
+        <p class="field-hint" id="projectNameHint">Use a project folder name without path separators.</p>
+        <div class="field-block">
+          <span class="field-label">Sources</span>
+          <p class="field-hint" id="projectSourceHint">Type or paste a local folder path when it is not listed.</p>
+          <div id="projectSourcePaths" class="path-list"></div>
+          <button id="addProjectSource" type="button" class="text-button path-add">+ Source</button>
+        </div>
+        <div class="field-block">
+          <span class="field-label">Replica roots</span>
+          <p class="field-hint" id="projectReplicaHint">Use an existing destination folder; the project folders will be created inside it.</p>
+          <div id="projectReplicaRoots" class="path-list"></div>
+          <button id="addProjectDestination" type="button" class="text-button path-add">+ Destination</button>
+        </div>
+        <p class="error-line" id="projectError" role="alert" aria-live="assertive" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" data-close="projectDialog" class="button subtle">Cancel</button>
+          <button type="submit" class="button primary">Create</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="startDialog" aria-labelledby="startDialogTitle">
+      <form id="startForm" method="dialog" class="dialog-card">
+        <h2 id="startDialogTitle">Start Replication</h2>
+        <label class="form-field">Project <select name="project_id" required aria-describedby="startSummary"></select></label>
+        <div class="field-block">
+          <span class="field-label">Sources</span>
+          <p class="field-hint" id="startSourceHint">Type or paste a local folder path when it is not listed.</p>
+          <div id="startSourcePaths" class="path-list"></div>
+          <button id="addStartSource" type="button" class="text-button path-add">+ Source</button>
+        </div>
+        <div class="field-block">
+          <span class="field-label">Destinations</span>
+          <p class="field-hint" id="startReplicaHint">Use existing replica roots, one per destination.</p>
+          <div id="startReplicaRoots" class="path-list"></div>
+          <button id="addStartDestination" type="button" class="text-button path-add">+ Destination</button>
+        </div>
+        <div class="form-grid">
+          <label class="form-field">Shoot date <input name="shoot_date" required placeholder="260528" aria-describedby="startSummary"></label>
+          <label class="form-field">Camera <input name="camera_unit" required placeholder="A-cam" aria-describedby="startSummary"></label>
+        </div>
+        <button type="button" id="previewRollButton" class="text-button">Preview roll</button>
+        <div id="startSummary" class="summary-box">Choose a project, source, and destination.</div>
+        <p class="error-line" id="startError" role="alert" aria-live="assertive" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" data-close="startDialog" class="button subtle">Cancel</button>
+          <button type="submit" class="button primary">Start</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="settingsDialog" aria-labelledby="settingsDialogTitle">
+      <form id="settingsForm" method="dialog" class="dialog-card" novalidate>
+        <h2 id="settingsDialogTitle">Runtime Settings</h2>
+        <label class="form-field">Bind host <input id="bindHostInput" name="bind_host" required autocomplete="off" aria-describedby="bindHostHint"></label>
+        <p class="field-hint" id="bindHostHint">Host or IP address only, without a URL scheme or port.</p>
+        <label class="form-field">Preferred port <input id="preferredPortInput" name="preferred_port" type="number" min="1024" max="65535" step="1" required aria-describedby="preferredPortHint"></label>
+        <p class="field-hint" id="preferredPortHint">Use a port from 1024 through 65535.</p>
+        <p class="error-line" id="settingsError" role="alert" aria-live="assertive" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" data-close="settingsDialog" class="button subtle">Cancel</button>
+          <button type="submit" class="button primary">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="/static/app.js?v=progress-current-fix" defer></script>
+  </body>
+</html>

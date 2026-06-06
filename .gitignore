@@ -1,0 +1,23 @@
+.DS_Store
+
+# Python/runtime cache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local agent/tool state
+.codegraph/
+.codex/
+.lazyweb/
+.superpowers/
+.pipeline/
+
+# Build and packaged artifacts
+build/
+dist/
+
+# Local environments
+.venv/
+venv/

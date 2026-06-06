@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>ai.hermes.data-pipeline-watcher</string>
+    <key>ProgramArguments</key>
+    <array>
+      <string>/bin/bash</string>
+      <string>/Users/ijaegyeong/Library/Application Support/data-handler-orchestrator/watch_once.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>60</integer>
+    <key>WorkingDirectory</key>
+    <string>/Users/ijaegyeong/Library/Application Support/data-handler-orchestrator</string>
+    <key>StandardOutPath</key>
+    <string>/Users/ijaegyeong/Library/Application Support/data-handler-orchestrator/watcher.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/ijaegyeong/Library/Application Support/data-handler-orchestrator/watcher.err.log</string>
+  </dict>
+</plist>
