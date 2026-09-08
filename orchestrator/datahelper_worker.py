@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -10,6 +11,8 @@ from orchestrator.jsonio import read_json, write_json
 from orchestrator.paths import DATA_HELPER_ROOT
 from orchestrator.run_state import events_dir, load_spec, run_dir, update_state, utc_now
 from orchestrator.web.progress import write_progress
+
+FRAMEPROOF_TOOL_DIRS = (Path("/opt/homebrew/bin"), Path("/usr/local/bin"))
 
 
 def run_datahelper(run_id: str) -> dict[str, Any]:
@@ -231,11 +234,33 @@ def build_frameproof_command(
         "1",
         "--project-name",
         project_name,
+        "--ffmpeg-path",
+        _resolve_frameproof_tool("ffmpeg"),
+        "--ffprobe-path",
+        _resolve_frameproof_tool("ffprobe"),
+        "--mediainfo-path",
+        _resolve_frameproof_tool("mediainfo"),
     ]
-    braw_adapter = DATA_HELPER_ROOT / "tools" / "braw_adapter"
-    if braw_adapter.exists():
-        command.extend(["--braw-adapter-path", str(braw_adapter)])
+    for flag, name in (
+        ("--braw-adapter-path", "braw_adapter"),
+        ("--r3d-adapter-path", "r3d_adapter"),
+        ("--arri-art-cmd-path", "art-cmd"),
+    ):
+        adapter = DATA_HELPER_ROOT / "tools" / name
+        if adapter.is_file():
+            command.extend([flag, str(adapter)])
     return command
+
+
+def _resolve_frameproof_tool(name: str) -> str:
+    resolved = shutil.which(name)
+    if resolved:
+        return resolved
+    for directory in FRAMEPROOF_TOOL_DIRS:
+        candidate = directory / name
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return name
 
 
 def _prepend_pythonpath(path: str, current: str | None) -> str:

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from orchestrator import cli, run_state, watcher
 from orchestrator.jsonio import write_json
-from orchestrator.spec import RunSpec
+from orchestrator.spec import RUN_MODE_DATAMANAGER, RunSpec
 
 
 def test_watcher_processes_done_artifact_once(monkeypatch, tmp_path: Path) -> None:
@@ -85,3 +85,41 @@ def test_continue_datamanager_skips_already_started_datahelper(
     cli.continue_datamanager("run-test")
 
     assert starts == []
+
+
+def test_continue_datamanager_stops_for_datamanager_mode(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runs_root = tmp_path / "runs"
+    monkeypatch.setattr(run_state, "RUNS_ROOT", runs_root)
+    monkeypatch.setattr(cli, "events_dir", run_state.events_dir)
+    monkeypatch.setattr(cli, "load_spec", run_state.load_spec)
+    monkeypatch.setattr(cli, "update_state", run_state.update_state)
+    monkeypatch.setattr(cli, "deliver_via_hermes_gateway", lambda **kwargs: None)
+
+    source = tmp_path / "source"
+    path1 = tmp_path / "path1"
+    path2 = tmp_path / "path2"
+    source.mkdir()
+    path1.mkdir()
+    path2.mkdir()
+    run_state.save_spec(
+        RunSpec(
+            run_id="run-datamanager",
+            project_name="Project",
+            source_path=source,
+            replica_roots=(path1, path2),
+            run_mode=RUN_MODE_DATAMANAGER,
+        )
+    )
+    write_json(
+        run_state.events_dir("run-datamanager") / "datamanager.done.json",
+        {"run_id": "run-datamanager", "status": "completed"},
+    )
+    starts: list[str] = []
+    monkeypatch.setattr(cli, "start_datahelper_stage", lambda run_id, *, trigger: starts.append(run_id))
+
+    cli.continue_datamanager("run-datamanager")
+
+    assert starts == []
+    assert not (run_state.events_dir("run-datamanager") / "datahelper.started.json").exists()

@@ -6,8 +6,9 @@ from typing import Any
 
 from orchestrator.jsonio import write_json
 from orchestrator.paths import DATA_MANAGER_ROOT
-from orchestrator.processes import spawn_python_module
 from orchestrator.run_state import events_dir, load_spec, run_dir, update_state, utc_now
+from orchestrator.spec import RUN_MODE_WORKFLOW
+from orchestrator.stages import start_datahelper_stage
 from orchestrator.web.progress import write_progress
 
 
@@ -57,7 +58,8 @@ def run_datamanager(run_id: str) -> dict[str, Any]:
                 "checksum_ready": payload.get("checksum_ready"),
             },
         )
-        _start_datahelper_once(run_id)
+        if spec.run_mode == RUN_MODE_WORKFLOW:
+            start_datahelper_stage(run_id, trigger="datamanager_worker")
     return payload
 
 
@@ -108,7 +110,7 @@ def _run(run_id: str) -> dict[str, Any]:
             source_path_ids=source_path_ids,
             replica_path_ids=replica_path_ids,
             operator_origin="hermes_orchestrator",
-            policy={"run_id": run_id, "footage_run_name": spec.footage_run_name},
+            policy={"run_id": run_id, "footage_run_name": spec.footage_run_name, "flat_card_layout": spec.flat_card_layout},
         )
     )
     agent.run_job(job.job_id)
@@ -234,42 +236,6 @@ def _footage_root(project_root: Path, files: list[Any], path_id: str) -> Path:
             if part.startswith("R#"):
                 return project_root.joinpath(*parts[: index + 1])
     return project_root / "01_Footage"
-
-
-def _start_datahelper_once(run_id: str) -> None:
-    event_dir = events_dir(run_id)
-    if (event_dir / "datahelper.done.json").exists():
-        return
-    started_path = event_dir / "datahelper.started.json"
-    if started_path.exists():
-        return
-    write_json(
-        started_path,
-        {
-            "run_id": run_id,
-            "stage": "datahelper",
-            "status": "starting",
-            "started_at": utc_now(),
-            "trigger": "datamanager_worker",
-        },
-    )
-    pid = spawn_python_module(run_id, "orchestrator.datahelper_worker", run_id)
-    write_json(
-        started_path,
-        {
-            "run_id": run_id,
-            "stage": "datahelper",
-            "status": "spawned",
-            "pid": pid,
-            "started_at": utc_now(),
-            "trigger": "datamanager_worker",
-        },
-    )
-    update_state(run_id, stage="datahelper", status=f"spawned pid={pid}")
-    write_progress(
-        run_dir(run_id),
-        {"stage": "datahelper", "status": "spawned", "step": "reports", "pid": pid},
-    )
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -7,11 +7,16 @@ from uuid import uuid4
 
 from orchestrator.delivery import deliver_via_hermes_gateway, read_markdown
 from orchestrator.jsonio import read_json, write_json
+from orchestrator.media_preflight import (
+    MediaDependencyPreflightError,
+    validate_media_dependencies,
+)
 from orchestrator.paths import DEFAULT_HERMES_PROFILE
 from orchestrator.processes import spawn_python_module
 from orchestrator.reporting import datamanager_message, final_message, write_final_report
 from orchestrator.run_state import events_dir, load_spec, save_spec, update_state, utc_now
-from orchestrator.spec import RunSpec
+from orchestrator.spec import RUN_MODE_DATAMANAGER, RUN_MODE_WORKFLOW, RunSpec
+from orchestrator.stages import start_datahelper_stage
 from orchestrator.watcher import watch_once
 
 
@@ -28,6 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--project-name", required=True)
     start.add_argument("--profile", default=DEFAULT_HERMES_PROFILE)
     start.add_argument("--run-id")
+    start.add_argument("--mode", choices=(RUN_MODE_WORKFLOW, RUN_MODE_DATAMANAGER), default=RUN_MODE_WORKFLOW)
 
     dm = subparsers.add_parser("continue-datamanager", help="Handle DataManager completion.")
     dm.add_argument("--run-id", required=True)
@@ -62,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
             project_name=args.project_name,
             profile=args.profile,
             run_id=args.run_id,
+            run_mode=args.mode,
         )
         print(run_id)
         return 0
@@ -89,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:
         import uvicorn
 
         uvicorn.run(
-            "orchestrator.app_front.server:create_app",
+            "orchestrator.dit_app.server:create_app",
             host=args.host,
             port=args.port,
             factory=True,
@@ -107,6 +114,8 @@ def start_run(
     profile: str,
     run_id: str | None = None,
     footage_run_name: str | None = None,
+    run_mode: str = RUN_MODE_WORKFLOW,
+    flat_card_layout: bool = False,
 ) -> str:
     active_run_id = run_id or f"run-{uuid4().hex[:12]}"
     active_source_paths = source_paths or ((source,) if source is not None else ())
@@ -120,8 +129,26 @@ def start_run(
         replica_roots=replica_paths,
         hermes_profile=profile,
         footage_run_name=footage_run_name,
+        run_mode=run_mode,
+        flat_card_layout=flat_card_layout,
     )
     save_spec(spec)
+    update_state(active_run_id, stage="media-preflight", status="running")
+    try:
+        preflight = validate_media_dependencies(
+            spec.source_paths,
+            check_processing_dependencies=spec.run_mode != RUN_MODE_DATAMANAGER,
+        )
+    except MediaDependencyPreflightError as exc:
+        _write_media_preflight_event(active_run_id, "failed", exc.report.to_dict())
+        update_state(
+            active_run_id,
+            stage="media-preflight",
+            status="failed",
+            error=str(exc),
+        )
+        raise
+    _write_media_preflight_event(active_run_id, "completed", preflight.to_dict())
     update_state(active_run_id, stage="datamanager", status="queued")
     try:
         spawn_python_module(active_run_id, "orchestrator.datamanager_worker", active_run_id)
@@ -130,6 +157,23 @@ def start_run(
         raise
     update_state(active_run_id, stage="datamanager", status="spawned")
     return active_run_id
+
+
+def _write_media_preflight_event(
+    run_id: str,
+    status: str,
+    report: dict[str, object],
+) -> None:
+    write_json(
+        events_dir(run_id) / "media-preflight.done.json",
+        {
+            "run_id": run_id,
+            "stage": "media-preflight",
+            "status": status,
+            "report": report,
+            "finished_at": utc_now(),
+        },
+    )
 
 
 def continue_datamanager(run_id: str) -> None:
@@ -150,35 +194,16 @@ def continue_datamanager(run_id: str) -> None:
             error="DataManager failed; DataHelper not started",
         )
         return
+    if spec.run_mode == RUN_MODE_DATAMANAGER:
+        update_state(run_id, stage="datamanager", status=str(done.get("status") or "completed"))
+        return
     event_dir = events_dir(run_id)
     if (event_dir / "datahelper.done.json").exists():
         return
     started_path = event_dir / "datahelper.started.json"
     if started_path.exists():
         return
-    write_json(
-        started_path,
-        {
-            "run_id": run_id,
-            "stage": "datahelper",
-            "status": "starting",
-            "started_at": utc_now(),
-            "trigger": "continue_datamanager",
-        },
-    )
-    pid = spawn_python_module(run_id, "orchestrator.datahelper_worker", run_id)
-    write_json(
-        started_path,
-        {
-            "run_id": run_id,
-            "stage": "datahelper",
-            "status": "spawned",
-            "pid": pid,
-            "started_at": utc_now(),
-            "trigger": "continue_datamanager",
-        },
-    )
-    update_state(run_id, stage="datahelper", status=f"spawned pid={pid}")
+    start_datahelper_stage(run_id, trigger="continue_datamanager")
 
 
 def continue_datahelper(run_id: str) -> None:

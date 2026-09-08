@@ -2,7 +2,7 @@ import Cocoa
 import Darwin
 import WebKit
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     private let appName = "Data Handler"
     private let bundleIdentifier = "com.dit.data-handler"
     private var window: NSWindow?
@@ -36,23 +36,79 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
         let configuration = WKWebViewConfiguration()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         configuration.websiteDataStore = .nonPersistent()
+        configuration.userContentController.add(self, name: "pathChooser")
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = self
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1180, height: 760),
+            contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.center()
         window.title = appName
+        window.minSize = NSSize(width: 1100, height: 760)
         window.contentView = webView
         window.makeKeyAndOrderFront(nil)
 
         self.webView = webView
         self.window = window
+    }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "pathChooser",
+              let payload = message.body as? [String: Any],
+              let requestId = payload["requestId"] as? String
+        else {
+            return
+        }
+
+        let currentPath = payload["currentPath"] as? String
+        showFolderPicker(requestId: requestId, currentPath: currentPath)
+    }
+
+    private func showFolderPicker(requestId: String, currentPath: String?) {
+        let panel = NSOpenPanel()
+        panel.title = "Select folder"
+        panel.prompt = "Choose"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+
+        if let currentPath, !currentPath.isEmpty {
+            let currentURL = URL(fileURLWithPath: currentPath)
+            var isDirectory: ObjCBool = false
+            if FileManager.default.fileExists(atPath: currentURL.path, isDirectory: &isDirectory) {
+                panel.directoryURL = isDirectory.boolValue ? currentURL : currentURL.deletingLastPathComponent()
+            }
+        }
+
+        if let window {
+            panel.beginSheetModal(for: window) { [weak self] response in
+                let selectedPath = response == .OK ? panel.url?.path : nil
+                self?.sendPathSelectionResult(requestId: requestId, path: selectedPath)
+            }
+            return
+        }
+
+        let response = panel.runModal()
+        sendPathSelectionResult(requestId: requestId, path: response == .OK ? panel.url?.path : nil)
+    }
+
+    private func sendPathSelectionResult(requestId: String, path: String?) {
+        let payload: [String: Any] = [
+            "requestId": requestId,
+            "path": path ?? NSNull()
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8)
+        else {
+            return
+        }
+        webView?.evaluateJavaScript("window.DataHandlerPathChooser && window.DataHandlerPathChooser.resolve(\(json));")
     }
 
     private func startAppFront() {
@@ -90,7 +146,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
 
         var environment = ProcessInfo.processInfo.environment
         let existingPythonPath = environment["PYTHONPATH"].map { ":\($0)" } ?? ""
+        let existingPath = environment["PATH"].map { ":\($0)" } ?? ""
         environment["PYTHONPATH"] = appRoot.path + existingPythonPath
+        environment["PATH"] = resources.appendingPathComponent("venv/bin").path + existingPath
         environment["PYTHONDONTWRITEBYTECODE"] = "1"
         environment["DATA_HANDLER_PIPELINE_ROOT"] = pipelineRoot.path
         environment["DATA_HANDLER_APP_BUNDLE"] = Bundle.main.bundlePath

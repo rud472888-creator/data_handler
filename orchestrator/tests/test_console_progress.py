@@ -3,8 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from orchestrator.jsonio import write_json
-from orchestrator.web.server import _progress_with_steps
-from orchestrator.web.progress import list_artifacts, load_run_progress, write_progress
+from orchestrator.web.server import _artifact_payloads, _progress_with_steps
+from orchestrator.web.progress import (
+    list_artifacts,
+    list_declared_artifacts,
+    load_run_progress,
+    write_progress,
+)
 
 
 def test_write_and_load_run_progress_prefers_progress_snapshot(tmp_path: Path) -> None:
@@ -69,8 +74,13 @@ def test_failed_progress_step_fallback_does_not_claim_copy_progress() -> None:
     progress = _progress_with_steps({"stage": "datamanager", "status": "failed"})
 
     assert progress["percent"] == 0
-    assert all(step["status"] != "done" for step in progress["steps"])
+    assert {"name": "setup", "status": "done"} in progress["steps"]
     assert {"name": "copy", "status": "failed"} in progress["steps"]
+    assert all(
+        step["status"] == "blocked"
+        for step in progress["steps"]
+        if step["name"] in {"checksum", "reports", "finalization", "done"}
+    )
 
 
 def test_load_run_progress_observes_copy_progress_from_replica_paths(tmp_path: Path) -> None:
@@ -110,6 +120,11 @@ def test_load_run_progress_observes_copy_progress_from_replica_paths(tmp_path: P
     assert progress["current"] == 13
     assert progress["total"] == 28
     assert progress["percent"] == 46
+    assert progress["copy_progress"]["bytes_observed"] == 13
+    assert progress["copy_progress"]["bytes_total"] == 28
+    assert progress["copy_progress"]["byte_percent"] == 46
+    assert progress["copy_progress"]["copied_files"] == 1
+    assert progress["copy_progress"]["total_files"] == 2
     assert progress["copied_files"] == 1
     assert progress["total_files"] == 2
     assert progress["file_count"] == 2
@@ -122,6 +137,45 @@ def test_load_run_progress_observes_copy_progress_from_replica_paths(tmp_path: P
     assert "2 replica paths" in progress["phase_detail"]
     assert progress["activity_state"] == "running"
     assert progress["progress_observed"] is True
+    assert progress["overall_progress"]["kind"] == "copy_bytes"
+    assert progress["overall_progress"]["percent"] == 46
+    assert progress["clip_progress"]["available"] is False
+
+
+def test_load_run_progress_observes_copy_progress_with_one_replica(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+    source = tmp_path / "source"
+    replica = tmp_path / "replica"
+    source.mkdir()
+    replica.mkdir()
+    (source / "A001_C001.braw").write_bytes(b"1234567890")
+    (source / "A001_C002.braw").write_bytes(b"12345678901234567890")
+    write_json(
+        run_dir / "request.json",
+        {
+            "run_id": "run-1",
+            "project_name": "Project",
+            "source_path": str(source),
+            "source_paths": [str(source)],
+            "replica_roots": [str(replica)],
+            "footage_run_name": "260528/A-cam/R#1",
+        },
+    )
+    write_progress(run_dir, {"stage": "datamanager", "status": "running"})
+    target = replica / "Project/01_Footage/260528/A-cam/R#1/source-path-1/A001_C001.braw"
+    partial = replica / "Project/01_Footage/260528/A-cam/R#1/source-path-1/.A001_C002.braw.partial-abc"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"1234567890")
+    partial.write_bytes(b"12345")
+
+    progress = load_run_progress(run_dir)
+
+    assert progress["copy_progress"]["bytes_observed"] == 15
+    assert progress["copy_progress"]["bytes_total"] == 30
+    assert progress["copy_progress"]["byte_percent"] == 50
+    assert progress["copy_progress"]["copied_files"] == 1
+    assert progress["copy_progress"]["total_files"] == 2
+    assert progress["copy_progress"]["replica_count"] == 1
 
 
 def test_load_run_progress_explains_datahelper_handler_reports(tmp_path: Path) -> None:
@@ -151,6 +205,99 @@ def test_load_run_progress_explains_datahelper_handler_reports(tmp_path: Path) -
     assert progress["activity_state"] == "running"
     assert progress["progress_observed"] is True
     assert with_steps["percent"] == 50
+    assert progress["report_progress"]["completed"] == 1
+    assert progress["report_progress"]["total"] == 2
+    assert progress["report_progress"]["percent"] == 50
+    assert progress["overall_progress"]["kind"] == "report_jobs"
+    assert progress["overall_progress"]["percent"] == 50
+
+
+def test_load_run_progress_marks_partial_media_result_for_review(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-review"
+    events = run_dir / "events"
+    events.mkdir(parents=True)
+    write_json(run_dir / "state.json", {"stage": "datahelper", "status": "completed"})
+    write_json(
+        events / "datahelper.done.json",
+        {
+            "status": "completed",
+            "reports": [
+                {
+                    "label": "path1",
+                    "status": "completed",
+                    "stdout": (
+                        "status: partial_success\n"
+                        "total_clips: 166\n"
+                        "success_count: 83\n"
+                        "probe_failed_count: 83\n"
+                        "decode_failed_count: 0\n"
+                    ),
+                }
+            ],
+        },
+    )
+
+    progress = load_run_progress(run_dir)
+    with_steps = _progress_with_steps(progress)
+
+    assert progress["status"] == "review-needed"
+    assert progress["activity_state"] == "needs_review"
+    assert progress["quality"]["issue_count"] == 83
+    assert progress["quality"]["total_clips"] == 166
+    assert progress["phase_label"] == "Backup complete, review needed"
+    assert with_steps["percent"] == 100
+    assert {step["status"] for step in with_steps["steps"] if step["name"] in {"reports", "done"}} == {"needs_review"}
+
+
+def test_load_run_progress_surfaces_failed_file_name(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-failed"
+    events = run_dir / "events"
+    events.mkdir(parents=True)
+    write_json(run_dir / "state.json", {"stage": "datamanager", "status": "failed"})
+    write_json(
+        events / "datamanager.done.json",
+        {
+            "status": "failed",
+            "job_state": "FAILED",
+            "failed_files": ["A001_05302023_C001.braw"],
+        },
+    )
+
+    progress = load_run_progress(run_dir)
+
+    assert progress["failure"]["failed_count"] == 1
+    assert progress["failure"]["failed_files"] == ["A001_05302023_C001.braw"]
+    assert progress["phase_detail"] == "1 file failed: A001_05302023_C001.braw"
+
+
+def test_datahelper_progress_does_not_use_copy_percent_as_report_progress(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-1"
+
+    write_progress(
+        run_dir,
+        {
+            "stage": "datahelper",
+            "status": "running",
+            "copy_progress": {
+                "available": True,
+                "unit": "bytes",
+                "bytes_observed": 49,
+                "bytes_total": 100,
+                "byte_percent": 49,
+                "copied_files": 3,
+                "total_files": 83,
+            },
+        },
+    )
+
+    progress = load_run_progress(run_dir)
+    with_steps = _progress_with_steps(progress)
+
+    assert progress["copy_progress"]["byte_percent"] == 49
+    assert progress["report_progress"]["available"] is False
+    assert progress["overall_progress"]["kind"] == "report_jobs"
+    assert progress["overall_progress"]["percent"] is None
+    assert "percent" not in with_steps
 
 
 def test_load_run_progress_explains_worker_start_without_claiming_output(tmp_path: Path) -> None:
@@ -180,6 +327,36 @@ def test_list_artifacts_reads_done_events_and_final_report(tmp_path: Path) -> No
     artifacts = list_artifacts(run_dir)
 
     assert {artifact["name"] for artifact in artifacts} == {"datahelper-path1 pdf", "final report"}
+
+
+def test_declared_artifacts_keep_offline_destination_state(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run-offline"
+    events = run_dir / "events"
+    events.mkdir(parents=True)
+    replica_root = tmp_path / "offline-volume" / "Project"
+    report_path = replica_root / "00_Master" / "reports" / "datahelper-path1.pdf"
+    write_json(
+        events / "datamanager.done.json",
+        {
+            "status": "completed",
+            "replica_project_roots": {"path1": str(replica_root)},
+            "reports": {},
+        },
+    )
+    write_json(
+        events / "datahelper.done.json",
+        {"reports": [{"label": "path1", "pdf_path": str(report_path)}]},
+    )
+
+    declared = list_declared_artifacts(run_dir)
+    payloads = _artifact_payloads("run-offline", run_dir)
+
+    assert declared == [
+        {"name": "datahelper-path1 pdf", "path": str(report_path), "kind": "pdf"}
+    ]
+    assert payloads[0]["availability"] == "destination_offline"
+    assert payloads[0]["available"] is False
+    assert payloads[0]["url"] is None
 
 
 def test_list_artifacts_accepts_legacy_datahelper_report_map(tmp_path: Path) -> None:

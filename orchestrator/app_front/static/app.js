@@ -11,13 +11,14 @@
     disks: [],
     diskError: null,
     unmountingPath: null,
-    activeView: "projects",
+    activeView: "workflow",
     selectedProjectId: null,
     selectedRunId: null,
     selectedRunDetail: null,
     progress: null,
     artifacts: [],
     latestPreview: null,
+    activeReportPreview: null,
     loading: false,
     errors: {
       load: "",
@@ -29,23 +30,26 @@
   var progressPollTimer = null;
   var PROGRESS_POLL_MS = 3000;
   var elements = {};
+  var pathPickerRequests = {};
+  var pathPickerSequence = 0;
 
   document.addEventListener("DOMContentLoaded", function () {
     elements = {
+      appShell: document.querySelector ? document.querySelector(".app-shell") : null,
       runtimeState: byId("runtimeState"),
-      projectsNav: byId("projectsNav"),
-      sourcesNav: byId("sourcesNav"),
-      runsNav: byId("runsNav"),
-      runtimeNav: byId("runtimeNav"),
-      sidebarStatusDot: byId("sidebarStatusDot"),
-      sidebarServerState: byId("sidebarServerState"),
-      projectsMeta: byId("projectsMeta"),
-      sourcesMeta: byId("sourcesMeta"),
-      runsMeta: byId("runsMeta"),
+      workflowNav: byId("workflowNav"),
+      datamanagerNav: byId("datamanagerNav"),
+      datahandlerNav: byId("datahandlerNav"),
+      workflowMeta: byId("workflowMeta"),
+      datamanagerMeta: byId("datamanagerMeta"),
+      datahandlerMeta: byId("datahandlerMeta"),
       diskSummary: byId("diskSummary"),
       diskList: byId("diskList"),
       importSourceButton: byId("importSourceButton"),
       startReplicationButton: byId("startReplicationButton"),
+      primaryActionHint: byId("primaryActionHint"),
+      workspaceTitle: byId("workspaceTitle"),
+      workspaceSubtitle: byId("workspaceSubtitle"),
       appErrorList: byId("appErrorList"),
       reviewProjectButton: byId("reviewProjectButton"),
       viewRunsButton: byId("viewRunsButton"),
@@ -53,17 +57,35 @@
       activeSource: byId("activeSource"),
       activeReplicas: byId("activeReplicas"),
       activeProject: byId("activeProject"),
+      projectReadiness: byId("projectReadiness"),
+      sourceReadiness: byId("sourceReadiness"),
+      replicaReadiness: byId("replicaReadiness"),
+      sourceReadinessDetail: byId("sourceReadinessDetail"),
+      replicaReadinessDetail: byId("replicaReadinessDetail"),
+      preflightSummary: byId("preflightSummary"),
+      preflightTitle: byId("preflightTitle"),
+      preflightDetail: byId("preflightDetail"),
+      activeProjectTitle: byId("activeProjectTitle"),
+      activeProjectSubtitle: byId("activeProjectSubtitle"),
       projectSwitcher: byId("projectSwitcher"),
       recentRunsList: byId("recentRunsList"),
+      progressPanel: byId("progressPanel"),
+      backupPanel: byId("backupPanel"),
       overallState: byId("overallState"),
       overallTitle: byId("overallTitle"),
       overallSubtitle: byId("overallSubtitle"),
       overallPercent: byId("overallPercent"),
       overallProgressbar: byId("overallProgressbar"),
       overallBar: byId("overallBar"),
+      selectedJobLabel: byId("selectedJobLabel"),
+      resultCallout: byId("resultCallout"),
+      resultCalloutTitle: byId("resultCalloutTitle"),
+      resultCalloutDetail: byId("resultCalloutDetail"),
+      resultActionButton: byId("resultActionButton"),
       copiedMetric: byId("copiedMetric"),
       verifiedMetric: byId("verifiedMetric"),
       reportsMetric: byId("reportsMetric"),
+      stageTimeline: byId("stageTimeline"),
       checksumReportList: byId("checksumReportList"),
       clipReportList: byId("clipReportList"),
       backupState: byId("backupState"),
@@ -82,6 +104,7 @@
       addProjectDestination: byId("addProjectDestination"),
       projectError: byId("projectError"),
       startDialog: byId("startDialog"),
+      startDialogTitle: byId("startDialogTitle"),
       startForm: byId("startForm"),
       startSourcePaths: byId("startSourcePaths"),
       startReplicaRoots: byId("startReplicaRoots"),
@@ -89,12 +112,20 @@
       addStartDestination: byId("addStartDestination"),
       previewRollButton: byId("previewRollButton"),
       startSummary: byId("startSummary"),
+      startSubmitButton: byId("startSubmitButton"),
       startError: byId("startError"),
       settingsDialog: byId("settingsDialog"),
       settingsForm: byId("settingsForm"),
       bindHostInput: byId("bindHostInput"),
       preferredPortInput: byId("preferredPortInput"),
-      settingsError: byId("settingsError")
+      settingsError: byId("settingsError"),
+      refreshVolumesButton: byId("refreshVolumesButton"),
+      volumeWorkspaceList: byId("volumeWorkspaceList"),
+      reportInspector: byId("reportInspector"),
+      reportPreviewTitle: byId("reportPreviewTitle"),
+      reportPreviewMeta: byId("reportPreviewMeta"),
+      reportPreviewFrame: byId("reportPreviewFrame"),
+      closeReportPreviewButton: byId("closeReportPreviewButton")
     };
 
     bindEvents();
@@ -102,13 +133,26 @@
     loadAll();
   });
 
+  window.DataHandlerPathChooser = {
+    resolve: function (payload) {
+      var requestId = payload && payload.requestId;
+      var pending = requestId ? pathPickerRequests[requestId] : null;
+      if (!pending) {
+        return;
+      }
+      delete pathPickerRequests[requestId];
+      pending.resolve(payload.path || "");
+    }
+  };
+
   function bindEvents() {
     elements.importSourceButton.addEventListener("click", loadAll);
     elements.viewRunsButton.addEventListener("click", loadAll);
+    elements.refreshVolumesButton.addEventListener("click", loadAll);
     elements.reviewProjectButton.addEventListener("click", openProjectDialog);
-    elements.startReplicationButton.addEventListener("click", openStartDialog);
+    elements.startReplicationButton.addEventListener("click", handlePrimaryAction);
     elements.footerSettingsButton.addEventListener("click", openSettingsDialog);
-    [elements.projectsNav, elements.sourcesNav, elements.runsNav, elements.runtimeNav].forEach(function (button) {
+    [elements.workflowNav, elements.datamanagerNav, elements.datahandlerNav].forEach(function (button) {
       button.addEventListener("click", function () {
         setActiveView(button.dataset.view || "projects", true);
       });
@@ -145,6 +189,8 @@
     elements.projectForm.addEventListener("submit", submitProject);
     elements.startForm.addEventListener("submit", submitRun);
     elements.settingsForm.addEventListener("submit", submitSettings);
+    elements.closeReportPreviewButton.addEventListener("click", closeReportPreview);
+    elements.resultActionButton.addEventListener("click", handleResultAction);
 
     document.querySelectorAll("[data-close]").forEach(function (button) {
       button.addEventListener("click", function () {
@@ -155,6 +201,9 @@
 
   function loadAll() {
     state.loading = true;
+    if (document.body) {
+      document.body.dataset.loading = "true";
+    }
     state.diskError = null;
     renderRuntime("Loading runtime", "starting");
     return Promise.all([
@@ -179,11 +228,17 @@
         }
         chooseSelectedRun();
         state.loading = false;
+        if (document.body) {
+          document.body.dataset.loading = "false";
+        }
         render();
         return loadSelectedRun();
       })
       .catch(function (error) {
         state.loading = false;
+        if (document.body) {
+          document.body.dataset.loading = "false";
+        }
         state.errors.load = readableError(error);
         renderRuntime(readableError(error), "failed");
         render();
@@ -206,6 +261,11 @@
         state.selectedRunDetail = payload;
         state.progress = payload.progress || null;
         state.artifacts = Array.isArray(payload.artifacts) ? payload.artifacts : [];
+        if (payload.run && payload.run.run_id) {
+          state.runs = state.runs.map(function (run) {
+            return run.run_id === payload.run.run_id ? payload.run : run;
+          });
+        }
         render();
         scheduleProgressPoll();
       })
@@ -267,20 +327,21 @@
   function render() {
     renderRuntimeStatus();
     renderView();
-    renderCounts();
+    renderModeMeta();
+    renderModeCopy();
     renderDisks();
     renderActiveProject();
     renderRecentRuns();
     renderProgress();
     renderReports();
+    renderReportPreview();
     renderCompletions();
+    renderVolumeWorkspace();
     renderAppErrors();
   }
 
   function renderRuntime(label, serverState) {
     elements.runtimeState.textContent = label;
-    elements.sidebarServerState.textContent = stateLabel(serverState);
-    elements.sidebarStatusDot.dataset.state = serverState;
   }
 
   function renderRuntimeStatus() {
@@ -302,13 +363,17 @@
   function setActiveView(view, shouldFocus) {
     state.activeView = view;
     renderView();
+    renderModeCopy();
     if (shouldFocus) {
       focusActiveView(view);
     }
   }
 
   function renderView() {
-    var activeView = state.activeView || "projects";
+    var activeView = state.activeView || "workflow";
+    if (document.body) {
+      document.body.dataset.view = activeView;
+    }
     document.querySelectorAll("[data-view]").forEach(function (button) {
       var active = button.dataset.view === activeView;
       button.classList.toggle("is-active", active);
@@ -326,10 +391,10 @@
 
   function focusActiveView(view) {
     var targets = {
-      projects: "activeProjectPanel",
-      sources: "activeProjectPanel",
-      runs: "recentRunsPanel",
-      runtime: "progressPanel"
+      workflow: "progressPanel",
+      datamanager: "activeProjectPanel",
+      datahandler: "progressPanel",
+      datahandler: "progressPanel"
     };
     var target = byId(targets[view] || "activeProjectPanel");
     if (target) {
@@ -337,10 +402,71 @@
     }
   }
 
-  function renderCounts() {
-    elements.projectsMeta.textContent = String(state.projects.length);
-    elements.sourcesMeta.textContent = String(state.sources.length);
-    elements.runsMeta.textContent = String(state.runs.length);
+  function renderModeMeta() {
+    elements.workflowMeta.textContent = "Live";
+    elements.datamanagerMeta.textContent = "Offload";
+    elements.datahandlerMeta.textContent = "DIT";
+  }
+
+  function renderModeCopy() {
+    var view = state.activeView || "workflow";
+    var copy = modeCopy(view);
+    elements.workspaceTitle.textContent = copy.title;
+    elements.workspaceSubtitle.textContent = copy.subtitle;
+    elements.startReplicationButton.textContent = copy.action;
+    elements.activeProjectTitle.textContent = copy.inputTitle;
+    elements.activeProjectSubtitle.textContent = copy.inputSubtitle;
+    elements.startReplicationButton.hidden = false;
+    elements.startReplicationButton.disabled = false;
+
+    if (view === "workflow") {
+      elements.primaryActionHint.textContent = "Create a verified offload Job.";
+      elements.startReplicationButton.title = "Set up a new backup";
+      return;
+    }
+
+    if (view === "datahandler") {
+      var availablePdf = state.artifacts.find(function (artifact) {
+        return artifact.url && String(artifact.kind || "").toLowerCase().indexOf("pdf") !== -1;
+      });
+      var offlineArtifact = state.artifacts.find(function (artifact) {
+        return artifact.availability === "destination_offline";
+      });
+      if (availablePdf) {
+        elements.startReplicationButton.textContent = "Open DIT Report";
+        elements.primaryActionHint.textContent = "Open the selected Job's PDF report.";
+        elements.startReplicationButton.title = "Open DIT Report";
+      } else if (offlineArtifact) {
+        elements.startReplicationButton.textContent = "Refresh Status";
+        elements.primaryActionHint.textContent = "Reconnect the destination, then refresh.";
+        elements.startReplicationButton.title = "Refresh volume and report status";
+      } else {
+        elements.startReplicationButton.textContent = "No Report Available";
+        elements.startReplicationButton.disabled = true;
+        elements.primaryActionHint.textContent = "Choose a Job with generated report artifacts.";
+        elements.startReplicationButton.title = "No report artifact is available";
+      }
+      return;
+    }
+
+    var readiness = runReadiness();
+    if (!readiness.hasProject) {
+      elements.startReplicationButton.textContent = "Create Project First";
+      elements.startReplicationButton.disabled = true;
+      elements.startReplicationButton.title = "Create a project preset before starting.";
+      elements.primaryActionHint.textContent = "Create a project preset, then connect its volumes.";
+      return;
+    }
+    if (!readiness.ready) {
+      elements.startReplicationButton.textContent = "Connect Required Volumes";
+      elements.startReplicationButton.disabled = true;
+      elements.startReplicationButton.title = readiness.message;
+      elements.primaryActionHint.textContent = readiness.message;
+      return;
+    }
+    elements.startReplicationButton.textContent = copy.action;
+    elements.startReplicationButton.title = copy.action;
+    elements.primaryActionHint.textContent = "Preflight passed. Review shoot metadata before launch.";
   }
 
   function renderActiveProject() {
@@ -365,6 +491,25 @@
       ? project.replica_roots.join(" | ")
       : "No replica roots configured";
     elements.activeReplicas.classList.toggle("muted", !(project && project.replica_roots && project.replica_roots.length));
+    var readiness = runReadiness();
+    setReadinessState(elements.projectReadiness, readiness.hasProject ? "ready" : "missing");
+    setReadinessState(elements.sourceReadiness, readiness.sourceReady ? "ready" : "missing");
+    setReadinessState(elements.replicaReadiness, readiness.replicaReady ? "ready" : "missing");
+    elements.sourceReadinessDetail.textContent = readiness.sourceReady
+      ? "Source is mounted and available."
+      : readiness.hasSource
+        ? "Connect: " + readiness.missingSources.join(", ")
+        : "Add a source path to this preset.";
+    elements.replicaReadinessDetail.textContent = readiness.replicaReady
+      ? readiness.replicaCount + " destination" + (readiness.replicaCount === 1 ? " is" : "s are") + " mounted."
+      : readiness.hasReplica
+        ? "Connect: " + readiness.missingReplicas.join(", ")
+        : "Add at least one destination to this preset.";
+    elements.preflightSummary.dataset.state = readiness.ready ? "ready" : "missing";
+    elements.preflightTitle.textContent = readiness.ready ? "Preflight passed" : "Preflight blocked";
+    elements.preflightDetail.textContent = readiness.ready
+      ? "The configured source and every destination are connected."
+      : readiness.message;
   }
 
   function renderRecentRuns() {
@@ -382,9 +527,10 @@
       if (run.run_id === state.selectedRunId) {
         button.classList.add("is-active");
       }
+      button.dataset.state = normalizedJobStatus(run.status);
       button.innerHTML = "<strong></strong><span></span>";
       button.querySelector("strong").textContent = [run.shoot_date, run.camera_unit, run.roll].filter(Boolean).join(" / ");
-      button.querySelector("span").textContent = run.run_id || "";
+      button.querySelector("span").textContent = stateLabelFromStatus(run.status);
       button.addEventListener("click", function () {
         state.selectedRunId = run.run_id;
         loadSelectedRun();
@@ -396,50 +542,81 @@
 
   function renderProgress() {
     var progress = state.progress || {};
-    var percent = progressPercent(progress);
     var hasRun = Boolean(state.selectedRunId);
     var stage = progress.stage || (hasRun ? "queued" : "standby");
-    var status = progress.status || (hasRun ? "waiting" : "idle");
-    var title = hasRun ? (progress.phase_label || progressTitle(stage, status)) : "Pipeline waiting";
-    var subtitle = hasRun
-      ? progressSubtitle(progress, status, state.selectedRunId)
-      : "No replication run is active.";
-    var activeFiles = Number(progress.active_files);
+    var status = progress.activity_state || progress.status || (hasRun ? "waiting" : "idle");
+    var overall = overallProgressModel(progress, hasRun, stage, status);
+    var clip = clipProgressModel(progress, hasRun);
 
+    elements.overallState.dataset.state = normalizedJobStatus(status);
+    elements.backupState.dataset.state = normalizedJobStatus(status);
+    elements.progressPanel.dataset.state = normalizedJobStatus(status);
+    elements.progressPanel.dataset.terminal = isTerminalStatus(status) ? "true" : "false";
+    elements.backupPanel.dataset.clipTelemetry = clip.available ? "true" : "false";
     elements.overallState.textContent = hasRun ? stateLabelFromStatus(status) : "Standby";
     elements.backupState.textContent = hasRun ? stateLabelFromStatus(status) : "Idle";
-    elements.overallTitle.textContent = title;
-    elements.overallSubtitle.textContent = subtitle;
-    elements.overallPercent.textContent = percent + "%";
-    elements.overallProgressbar.setAttribute("aria-valuenow", String(percent));
-    elements.overallBar.style.width = percent + "%";
+    var selectedRun = state.selectedRunDetail && state.selectedRunDetail.run;
+    elements.selectedJobLabel.textContent = selectedRun
+      ? [selectedRun.shoot_date, selectedRun.camera_unit, selectedRun.roll].filter(Boolean).join(" / ")
+      : "Choose a Job from history to inspect it.";
+    elements.overallTitle.textContent = overall.title;
+    elements.overallSubtitle.textContent = overall.subtitle;
+    elements.overallPercent.textContent = overall.valueLabel;
+    elements.overallProgressbar.setAttribute("aria-valuenow", String(overall.barPercent));
+    elements.overallBar.style.width = overall.barPercent + "%";
     elements.copiedMetric.textContent = metricFileCount(progress);
     elements.verifiedMetric.textContent = metricReplicaCount(progress);
     elements.reportsMetric.textContent = metricReportCount(progress);
-    elements.activeClipCount.textContent = hasRun && Number.isFinite(activeFiles) && activeFiles > 0
-      ? activeFiles + " active"
-      : activityLabel(progress);
-    elements.clipProgressTitle.textContent = hasRun ? title : "No active backup";
-    elements.clipProgressSubtitle.textContent = hasRun ? subtitle : "Clip-level progress will appear during replication.";
-    elements.clipProgressPercent.textContent = percent + "%";
-    elements.clipProgressbar.setAttribute("aria-valuenow", String(percent));
-    elements.clipProgressBar.style.width = percent + "%";
+    renderStageTimeline(progress, hasRun);
+    elements.activeClipCount.textContent = clip.headerLabel;
+    elements.clipProgressTitle.textContent = clip.title;
+    elements.clipProgressSubtitle.textContent = clip.subtitle;
+    elements.clipProgressPercent.textContent = clip.valueLabel;
+    elements.clipProgressbar.setAttribute("aria-valuenow", String(clip.barPercent));
+    elements.clipProgressBar.style.width = clip.barPercent + "%";
+    renderResultCallout(progress, hasRun);
   }
 
   function renderReports() {
-    renderReportList(elements.checksumReportList, filterArtifacts("checksum", "manifest"), "No checksum or manifest report yet");
-    renderReportList(elements.clipReportList, filterArtifacts("clip", "validation", "datahelper"), "No clip validation report yet");
+    renderReportList(elements.checksumReportList, filterArtifacts("checksum", "manifest"), "No checksum output recorded");
+    renderReportList(elements.clipReportList, filterArtifacts("clip", "validation", "datahelper"), "No media inspection output recorded");
   }
 
   function renderReportList(container, artifacts, emptyText) {
     clearChildren(container);
+    container.dataset.empty = artifacts.length ? "false" : "true";
     if (!artifacts.length) {
-      container.appendChild(reportItem(emptyText, "--", null));
+      container.appendChild(reportItem(emptyText, "Not recorded", null, "missing"));
       return;
     }
     artifacts.forEach(function (artifact) {
-      container.appendChild(reportItem(artifact.name || "Report", artifact.kind || "ready", artifact.url));
+      container.appendChild(reportItem(
+        artifactDisplayName(artifact),
+        artifactAvailabilityLabel(artifact),
+        artifact.url,
+        artifact.availability || (artifact.url ? "available" : "missing")
+      ));
     });
+  }
+
+  function renderReportPreview() {
+    var preview = state.activeReportPreview;
+    var isOpen = Boolean(preview && preview.url);
+    if (elements.appShell) {
+      elements.appShell.dataset.inspectorOpen = isOpen ? "true" : "false";
+    }
+    elements.reportInspector.hidden = !isOpen;
+    if (!isOpen) {
+      elements.reportPreviewTitle.textContent = "Report Preview";
+      elements.reportPreviewMeta.textContent = "No report selected.";
+      elements.reportPreviewFrame.src = "";
+      return;
+    }
+    elements.reportPreviewTitle.textContent = preview.name || "Report Preview";
+    elements.reportPreviewMeta.textContent = preview.meta || "ready";
+    if (elements.reportPreviewFrame.src !== preview.url) {
+      elements.reportPreviewFrame.src = preview.url;
+    }
   }
 
   function renderCompletions() {
@@ -447,17 +624,21 @@
     var runs = currentProjectRuns().filter(function (run) {
       return isCompletedStatus(run.status);
     }).slice(0, 4);
-    for (var index = 0; index < 4; index += 1) {
-      var run = runs[index];
+    if (!runs.length) {
+      var empty = document.createElement("li");
+      empty.className = "completion-empty";
+      empty.textContent = "No completed hand-offs";
+      elements.completionList.appendChild(empty);
+      return;
+    }
+    runs.forEach(function (run, index) {
       var item = document.createElement("li");
       item.innerHTML = "<span class=\"completion-index\"></span><span class=\"completion-copy\"></span><span class=\"completion-meta\"></span>";
       item.querySelector(".completion-index").textContent = String(index + 1).padStart(2, "0");
-      item.querySelector(".completion-copy").textContent = run
-        ? [run.shoot_date, run.camera_unit, run.roll].filter(Boolean).join(" / ")
-        : "Waiting for completed clip";
-      item.querySelector(".completion-meta").textContent = run ? "recorded" : "--";
+      item.querySelector(".completion-copy").textContent = [run.shoot_date, run.camera_unit, run.roll].filter(Boolean).join(" / ");
+      item.querySelector(".completion-meta").textContent = stateLabelFromStatus(run.status);
       elements.completionList.appendChild(item);
-    }
+    });
   }
 
   function renderDisks() {
@@ -517,6 +698,57 @@
     elements.startDialog.showModal();
   }
 
+  function handlePrimaryAction() {
+    var view = state.activeView || "workflow";
+    if (view === "workflow") {
+      setActiveView("datamanager", true);
+      return;
+    }
+    if (view === "datahandler") {
+      var report = state.artifacts.find(function (artifact) {
+        return artifact.url && String(artifact.kind || "").toLowerCase().indexOf("pdf") !== -1;
+      });
+      if (report) {
+        openReportPreview(report.name || "DIT Report", artifactAvailabilityLabel(report), report.url);
+      } else if (state.artifacts.some(function (artifact) { return artifact.availability === "destination_offline"; })) {
+        loadAll();
+      }
+      return;
+    }
+    var readiness = runReadiness();
+    if (!readiness.ready) {
+      return;
+    }
+    if (!selectedProject()) {
+      openProjectDialog();
+      return;
+    }
+    openStartDialog();
+  }
+
+  function startDataHandlerForSelectedRun() {
+    var handlerState = datahandlerActionState();
+    if (!handlerState.enabled) {
+      state.errors.poll = handlerState.message;
+      renderAppErrors();
+      renderModeCopy();
+      return;
+    }
+    showLine(elements.startError, "");
+    elements.startReplicationButton.disabled = true;
+    api("/api/runs/" + encodeURIComponent(state.selectedRunId) + "/datahandler", {
+      method: "POST",
+      body: JSON.stringify({})
+    })
+      .then(function () {
+        return loadSelectedRun();
+      })
+      .catch(function (error) {
+        state.errors.poll = readableError(error);
+        render();
+      });
+  }
+
   function openSettingsDialog() {
     var settings = state.settings || {};
     elements.bindHostInput.value = settings.bind_host || "127.0.0.1";
@@ -526,6 +758,9 @@
   }
 
   function renderStartOptions() {
+    var copy = modeCopy(activeMode());
+    elements.startDialogTitle.textContent = copy.action;
+    elements.startSubmitButton.textContent = copy.action;
     var projectSelect = elements.startForm.elements.project_id;
     projectSelect.replaceChildren();
     state.projects.forEach(function (project) {
@@ -661,7 +896,8 @@
       camera_unit: String(formData.get("camera_unit") || ""),
       source_path: sourcePaths[0] || "",
       source_paths: sourcePaths,
-      replica_roots: selectedValues(elements.startReplicaRoots)
+      replica_roots: selectedValues(elements.startReplicaRoots),
+      run_mode: activeMode() === "datamanager" ? "datamanager" : "workflow"
     };
   }
 
@@ -686,6 +922,111 @@
         return payload;
       });
     });
+  }
+
+  function activeMode() {
+    // New Backup always runs the complete copy, verification, and report sequence.
+    return "workflow";
+  }
+
+  function modeCopy(view) {
+    if (view === "datamanager") {
+      return {
+        title: "New Backup",
+        subtitle: "Confirm connected media, destinations, and shoot metadata before offload.",
+        action: "Review & Start",
+        inputTitle: "Backup Readiness",
+        inputSubtitle: "Project and connected media must be ready."
+      };
+    }
+    if (view === "datahandler") {
+      return {
+        title: "Reports",
+        subtitle: "Review DIT outputs, media issues, and destination availability.",
+        action: "Open DIT Report",
+        inputTitle: "Report Context",
+        inputSubtitle: "Select a Job to inspect its outputs."
+      };
+    }
+    return {
+      title: "Jobs",
+      subtitle: "Monitor backups, verification, media checks, and report handoff.",
+      action: "New Backup",
+      inputTitle: "Job Context",
+      inputSubtitle: "Choose a recent Job or start a new backup."
+    };
+  }
+
+  function datahandlerActionState() {
+    if (!state.selectedRunId) {
+      return { enabled: false, message: "Select a completed DataManager run." };
+    }
+    var progress = state.progress || {};
+    if (progress.datahelper_done) {
+      return { enabled: false, message: "DataHandler has already completed for the selected run." };
+    }
+    if (progress.datahelper_started) {
+      return { enabled: false, message: "DataHandler has already started for the selected run." };
+    }
+    if (!progress.datamanager_done) {
+      return { enabled: false, message: "The selected run has no completed DataManager output yet." };
+    }
+    var status = String(progress.status || "").toLowerCase();
+    if (status === "failed" || status === "error") {
+      return { enabled: false, message: "DataManager failed for the selected run." };
+    }
+    return { enabled: true, message: "Ready to run DataHandler for the selected DataManager output." };
+  }
+
+  function runReadiness() {
+    var project = selectedProject();
+    var sourcePaths = project && Array.isArray(project.source_paths) ? project.source_paths : [];
+    var replicaRoots = project && Array.isArray(project.replica_roots) ? project.replica_roots : [];
+    var missingSources = sourcePaths.filter(function (path) { return !pathIsMounted(path); });
+    var missingReplicas = replicaRoots.filter(function (path) { return !pathIsMounted(path); });
+    var sourceReady = sourcePaths.length > 0 && missingSources.length === 0;
+    var replicaReady = replicaRoots.length > 0 && missingReplicas.length === 0;
+    var message = "Select a project preset.";
+    if (project && !sourcePaths.length) {
+      message = "Add a source path to the selected project preset.";
+    } else if (project && missingSources.length) {
+      message = "Connect source: " + missingSources.join(", ");
+    } else if (project && !replicaRoots.length) {
+      message = "Add at least one destination to the selected project preset.";
+    } else if (project && missingReplicas.length) {
+      message = "Connect destination: " + missingReplicas.join(", ");
+    }
+    return {
+      hasProject: Boolean(project),
+      hasSource: sourcePaths.length > 0,
+      hasReplica: replicaRoots.length > 0,
+      sourceReady: sourceReady,
+      replicaReady: replicaReady,
+      replicaCount: replicaRoots.length,
+      missingSources: missingSources,
+      missingReplicas: missingReplicas,
+      ready: Boolean(project && sourceReady && replicaReady),
+      message: Boolean(project && sourceReady && replicaReady) ? "Preflight passed." : message
+    };
+  }
+
+  function setReadinessState(element, readinessState) {
+    if (!element) {
+      return;
+    }
+    element.dataset.state = readinessState || "missing";
+  }
+
+  function pathIsMounted(path) {
+    return state.disks.some(function (disk) {
+      return pathBelongsToDisk(path, disk);
+    });
+  }
+
+  function pathBelongsToDisk(path, disk) {
+    var normalized = String(path || "").replace(/\/+$/, "");
+    var mountPath = String((disk || {}).path || "").replace(/\/+$/, "");
+    return Boolean(normalized && mountPath && (normalized === mountPath || normalized.indexOf(mountPath + "/") === 0));
   }
 
   function selectedProject() {
@@ -720,6 +1061,13 @@
   }
 
   function progressPercent(progress) {
+    var overall = progress && progress.overall_progress;
+    if (overall && typeof overall === "object") {
+      var overallPercent = Number(overall.percent);
+      if (Number.isFinite(overallPercent)) {
+        return Math.max(0, Math.min(100, Math.round(overallPercent)));
+      }
+    }
     var explicitPercent = Number(progress.percent);
     if (Number.isFinite(explicitPercent)) {
       return Math.max(0, Math.min(100, Math.round(explicitPercent)));
@@ -742,7 +1090,194 @@
     return 0;
   }
 
+  function overallProgressModel(progress, hasRun, stage, status) {
+    if (!hasRun) {
+      return progressDisplay("Pipeline waiting", "No replication run is active.", null, "0%");
+    }
+    var raw = progress.overall_progress && typeof progress.overall_progress === "object"
+      ? progress.overall_progress
+      : {};
+    var title = userFacingProgressTitle(raw.title || progress.phase_label || progressTitle(stage, status));
+    var subtitle = progressSubtitle(
+      {
+        program: progress.program,
+        stage: progress.stage,
+        phase_detail: raw.subtitle || progress.phase_detail,
+        last_progress_at: progress.last_progress_at
+      },
+      status,
+      state.selectedRunId
+    );
+    var percent = finitePercent(raw.percent);
+    if (percent === null && !raw.kind && stage !== "datahelper" && stage !== "reports") {
+      percent = progressPercent(progress);
+    }
+    if (percent !== null) {
+      return progressDisplay(title, subtitle, percent, percentLabel(percent, raw.kind));
+    }
+    return progressDisplay(title, subtitle, null, unknownProgressLabel(progress));
+  }
+
+  function clipProgressModel(progress, hasRun) {
+    if (!hasRun) {
+      return {
+        title: "No active backup",
+        subtitle: "Clip-level progress will appear during replication.",
+        valueLabel: "0%",
+        barPercent: 0,
+        headerLabel: "Idle",
+        available: false
+      };
+    }
+    var clip = progress.clip_progress && typeof progress.clip_progress === "object"
+      ? progress.clip_progress
+      : {};
+    if (clip.available) {
+      var percent = finitePercent(clip.percent);
+      return {
+        title: clip.title || clip.name || "Active clip telemetry",
+        subtitle: clip.subtitle || "Current clip-level progress is being reported.",
+        valueLabel: percent === null ? "Running" : percent + "%",
+        barPercent: percent === null ? 0 : percent,
+        headerLabel: clipHeaderLabel(clip),
+        available: true
+      };
+    }
+    return {
+      title: "Not reported",
+      subtitle: "Clip-level progress is unavailable for this Job.",
+      valueLabel: "--",
+      barPercent: 0,
+      headerLabel: "No telemetry",
+      available: false
+    };
+  }
+
+  function progressDisplay(title, subtitle, percent, valueLabel) {
+    return {
+      title: title,
+      subtitle: subtitle,
+      valueLabel: valueLabel,
+      barPercent: percent === null ? 0 : percent
+    };
+  }
+
+  function renderStageTimeline(progress, hasRun) {
+    clearChildren(elements.stageTimeline);
+    var steps = hasRun && Array.isArray(progress.steps) && progress.steps.length
+      ? progress.steps
+      : defaultTimelineSteps();
+    steps.forEach(function (step) {
+      var item = document.createElement("li");
+      var status = normalizeStepStatus(step.status);
+      var name = String(step.name || "");
+      item.dataset.state = status;
+      item.innerHTML = "<span></span><strong></strong>";
+      item.querySelector("span").textContent = stageNameLabel(name);
+      item.querySelector("strong").textContent = stepStateLabel(status, hasRun);
+      elements.stageTimeline.appendChild(item);
+    });
+  }
+
+  function defaultTimelineSteps() {
+    return ["setup", "copy", "checksum", "reports", "finalization", "done"].map(function (name) {
+      return { name: name, status: "pending" };
+    });
+  }
+
+  function normalizeStepStatus(status) {
+    var normalized = String(status || "pending").toLowerCase();
+    if (normalized === "done" || normalized === "current" || normalized === "failed" || normalized === "needs_review" || normalized === "blocked") {
+      return normalized;
+    }
+    return "pending";
+  }
+
+  function stageNameLabel(name) {
+    var labels = {
+      setup: "Setup",
+      copy: "Copy",
+      checksum: "Verify",
+      reports: "Media Check",
+      finalization: "Report",
+      done: "Handoff"
+    };
+    return labels[name] || name || "Step";
+  }
+
+  function stepStateLabel(status, hasRun) {
+    if (!hasRun) {
+      return "Waiting";
+    }
+    var labels = {
+      done: "Done",
+      current: "Now",
+      failed: "Failed",
+      needs_review: "Review",
+      blocked: "Not run",
+      pending: "Waiting"
+    };
+    return labels[status] || "Waiting";
+  }
+
+  function finitePercent(value) {
+    if (value === null || value === undefined || value === "") {
+      return null;
+    }
+    var percent = Number(value);
+    if (!Number.isFinite(percent)) {
+      return null;
+    }
+    return Math.max(0, Math.min(100, Math.round(percent)));
+  }
+
+  function percentLabel(percent, kind) {
+    if (kind === "copy_bytes") {
+      return percent + "% bytes observed";
+    }
+    if (kind === "report_jobs") {
+      return percent + "% reports";
+    }
+    return percent + "%";
+  }
+
+  function unknownProgressLabel(progress) {
+    var state = String(progress.activity_state || progress.status || "").toLowerCase();
+    if (state === "waiting" || state.indexOf("spawned") === 0 || state === "starting") {
+      return "Waiting";
+    }
+    if (state === "failed" || state === "error") {
+      return "Failed";
+    }
+    if (state === "needs_review" || state === "warn" || state === "review-needed") {
+      return "Review";
+    }
+    if (state === "complete" || state === "completed" || state === "done") {
+      return "Complete";
+    }
+    return "Running";
+  }
+
+  function clipHeaderLabel(clip) {
+    var active = Number(clip.active_files || clip.active_clips);
+    if (Number.isFinite(active) && active > 0) {
+      return active + " active";
+    }
+    return "Clip telemetry";
+  }
+
   function metricFileCount(progress) {
+    var copy = progress.copy_progress && typeof progress.copy_progress === "object" ? progress.copy_progress : {};
+    var copiedFiles = Number(copy.copied_files);
+    var totalCopyFiles = Number(copy.total_files || copy.file_count);
+    if (Number.isFinite(copiedFiles) && Number.isFinite(totalCopyFiles) && totalCopyFiles > 0) {
+      return String(copiedFiles) + "/" + String(totalCopyFiles);
+    }
+    var copied = Number(progress.copied_files);
+    var total = Number(progress.total_files);
+    if (Number.isFinite(copied) && Number.isFinite(total) && total > 0) {
+      return String(copied) + "/" + String(total);
+    }
     var fileCount = Number(progress.file_count);
     if (Number.isFinite(fileCount)) {
       return String(fileCount);
@@ -752,6 +1287,11 @@
   }
 
   function metricReplicaCount(progress) {
+    var copy = progress.copy_progress && typeof progress.copy_progress === "object" ? progress.copy_progress : {};
+    var copyReplicaCount = Number(copy.replica_count);
+    if (Number.isFinite(copyReplicaCount)) {
+      return String(copyReplicaCount);
+    }
     var replicaCount = Number(progress.replica_count);
     if (Number.isFinite(replicaCount)) {
       return String(replicaCount);
@@ -761,6 +1301,11 @@
   }
 
   function metricReportCount(progress) {
+    var report = progress.report_progress && typeof progress.report_progress === "object" ? progress.report_progress : {};
+    var artifactCount = Number(report.artifact_count);
+    if (Number.isFinite(artifactCount)) {
+      return String(artifactCount);
+    }
     var reportCount = Number(progress.report_count);
     if (Number.isFinite(reportCount)) {
       return String(reportCount);
@@ -774,6 +1319,28 @@
       var name = String(artifact.name || artifact.path || "").toLowerCase();
       return terms.some(function (term) { return name.indexOf(term) !== -1; });
     });
+  }
+
+  function artifactDisplayName(artifact) {
+    var name = String(artifact.name || artifact.path || "").toLowerCase();
+    var destinationMatch = name.match(/path(\d+)/);
+    var destinationSuffix = destinationMatch ? " · Destination " + destinationMatch[1] : "";
+    if (name.indexOf("checksum") !== -1) {
+      return "Checksum Report";
+    }
+    if (name.indexOf("manifest") !== -1) {
+      return "Copy Manifest";
+    }
+    if (name.indexOf("datahelper") !== -1 && name.indexOf("pdf") !== -1) {
+      return "DIT Report" + destinationSuffix;
+    }
+    if (name.indexOf("datahelper") !== -1 && name.indexOf("csv") !== -1) {
+      return "Media Inspection CSV" + destinationSuffix;
+    }
+    if (name.indexOf("datahelper") !== -1 && name.indexOf("json") !== -1) {
+      return "Media Inspection JSON" + destinationSuffix;
+    }
+    return artifact.name || "Report";
   }
 
   function replacePathRows(container, fieldName, candidates, values) {
@@ -809,6 +1376,25 @@
     if (value) {
       input.value = value;
     }
+    var browse = document.createElement("button");
+    browse.type = "button";
+    browse.className = "button subtle path-browse";
+    browse.textContent = "Browse";
+    browse.setAttribute("aria-label", fieldName === "source_paths" ? "Browse source folder" : "Browse destination folder");
+    browse.addEventListener("click", function () {
+      requestFolderPath(input.value)
+        .then(function (path) {
+          if (!path) {
+            input.focus();
+            return;
+          }
+          input.value = path;
+          updateStartSummary();
+        })
+        .catch(function (error) {
+          showLine(errorLineForPathContainer(container), readableError(error));
+        });
+    });
     var remove = document.createElement("button");
     remove.type = "button";
     remove.className = "icon-button path-remove";
@@ -822,9 +1408,34 @@
         updateStartSummary();
       }
     });
-    row.append(input, list, remove);
+    row.append(input, list, browse, remove);
     container.append(row);
     updatePathRemoveStates(container);
+  }
+
+  function requestFolderPath(currentPath) {
+    var handler = window.webkit
+      && window.webkit.messageHandlers
+      && window.webkit.messageHandlers.pathChooser;
+    if (!handler || typeof handler.postMessage !== "function") {
+      return Promise.resolve("");
+    }
+    pathPickerSequence += 1;
+    var requestId = "path-" + Date.now() + "-" + pathPickerSequence;
+    return new Promise(function (resolve) {
+      pathPickerRequests[requestId] = { resolve: resolve };
+      handler.postMessage({
+        requestId: requestId,
+        currentPath: currentPath || ""
+      });
+    });
+  }
+
+  function errorLineForPathContainer(container) {
+    if (container.id === "startSourcePaths" || container.id === "startReplicaRoots") {
+      return elements.startError;
+    }
+    return elements.projectError;
   }
 
   function pathHintId(fieldName, container) {
@@ -922,21 +1533,56 @@
     return fragment;
   }
 
-  function reportItem(name, meta, url) {
+  function reportItem(name, meta, url, availability) {
     var item = document.createElement("li");
     var dot = document.createElement("span");
     var label = url ? document.createElement("a") : document.createElement("span");
     var time = document.createElement("time");
     dot.className = "report-dot";
-    dot.dataset.state = url ? "ready" : "idle";
+    dot.dataset.state = availability === "available" ? "ready" : availability || "idle";
     label.textContent = name;
     if (url) {
       label.href = url;
       label.className = "report-link";
+      if (isPdfUrl(url)) {
+        label.addEventListener("click", function (event) {
+          event.preventDefault();
+          openReportPreview(name, meta, url);
+        });
+      }
     }
     time.textContent = meta;
     item.append(dot, label, time);
     return item;
+  }
+
+  function artifactAvailabilityLabel(artifact) {
+    var availability = artifact && artifact.availability;
+    if (availability === "destination_offline") {
+      return "Drive offline";
+    }
+    if (availability === "missing") {
+      return "Missing";
+    }
+    return artifact && artifact.kind ? artifact.kind : "Available";
+  }
+
+  function isPdfUrl(url) {
+    return String(url || "").split("?")[0].toLowerCase().endsWith(".pdf");
+  }
+
+  function openReportPreview(name, meta, url) {
+    state.activeReportPreview = {
+      name: name,
+      meta: meta,
+      url: url
+    };
+    renderReportPreview();
+  }
+
+  function closeReportPreview() {
+    state.activeReportPreview = null;
+    renderReportPreview();
   }
 
   function normalizeDisks(disks) {
@@ -957,6 +1603,143 @@
     }).filter(function (disk) {
       return disk.path !== "-";
     });
+  }
+
+  function renderVolumeWorkspace() {
+    clearChildren(elements.volumeWorkspaceList);
+    var project = selectedProject();
+    var configuredRoles = [];
+    if (project) {
+      (project.source_paths || []).forEach(function (path) {
+        configuredRoles.push({ role: "Source", path: path });
+      });
+      (project.replica_roots || []).forEach(function (path) {
+        configuredRoles.push({ role: "Destination", path: path });
+      });
+    }
+    var connected = state.disks.map(function (disk) {
+      var roles = configuredRoles.filter(function (item) {
+        return pathBelongsToDisk(item.path, disk);
+      }).map(function (item) {
+        return item.role;
+      });
+      return {
+        disk: disk,
+        role: roles.length ? roles.join(", ") : (disk.disk_type === "external" ? "Unassigned" : "System")
+      };
+    });
+    var reconnect = configuredRoles.filter(function (item) {
+      return !state.disks.some(function (disk) {
+        return pathBelongsToDisk(item.path, disk);
+      });
+    });
+    if (!connected.length && !reconnect.length) {
+      elements.volumeWorkspaceList.appendChild(emptyLine("No volumes", "Connect media or select a project preset."));
+      return;
+    }
+
+    function appendGroup(title, detail, items, missing) {
+      if (!items.length) {
+        return;
+      }
+      var group = document.createElement("section");
+      group.className = "volume-group";
+      group.dataset.state = missing ? "missing" : "ready";
+      var heading = document.createElement("div");
+      heading.className = "volume-group-heading";
+      heading.innerHTML = "<div><h3></h3><p></p></div><span class=\"volume-count\"></span>";
+      heading.querySelector("h3").textContent = title;
+      heading.querySelector("p").textContent = detail;
+      heading.querySelector(".volume-count").textContent = String(items.length);
+      group.appendChild(heading);
+      var list = document.createElement("div");
+      list.className = "volume-group-list";
+      items.forEach(function (item) {
+        var disk = item.disk || null;
+        var row = document.createElement("div");
+        row.className = "volume-workspace-row";
+        row.dataset.state = missing ? "missing" : "ready";
+        row.innerHTML = "<div><span class=\"volume-role\"></span><strong></strong><span class=\"volume-path\"></span></div><div class=\"volume-state\"><strong></strong><span></span></div>";
+        row.querySelector(".volume-role").textContent = item.role;
+        row.querySelector("div > strong").textContent = disk ? disk.name : volumeName(item.path);
+        row.querySelector(".volume-path").textContent = disk ? disk.path : item.path;
+        row.querySelector(".volume-state strong").textContent = missing ? "Not connected" : "Connected";
+        row.querySelector(".volume-state span").textContent = missing ? "Required for backup" : formatBytes(disk.free_bytes) + " free";
+        list.appendChild(row);
+      });
+      group.appendChild(list);
+      elements.volumeWorkspaceList.appendChild(group);
+    }
+
+    appendGroup("Mounted Volumes", "Currently connected to this Mac.", connected, false);
+    appendGroup("Reconnect Required", "Configured paths that are not currently mounted.", reconnect, true);
+  }
+
+  function volumeName(path) {
+    var parts = String(path || "").split("/").filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : "Unknown volume";
+  }
+
+  function renderResultCallout(progress, hasRun) {
+    var quality = progress.quality && typeof progress.quality === "object" ? progress.quality : null;
+    var failure = progress.failure && typeof progress.failure === "object" ? progress.failure : null;
+    var status = String(progress.activity_state || progress.status || "").toLowerCase();
+    if (!hasRun || (!quality && !failure && status !== "failed" && status !== "error")) {
+      elements.resultCallout.hidden = true;
+      return;
+    }
+    elements.resultCallout.hidden = false;
+    if (failure && Number(failure.failed_count) > 0) {
+      elements.resultCallout.dataset.state = "failed";
+      elements.resultCalloutTitle.textContent = "Backup failed";
+      elements.resultCalloutDetail.textContent = failure.failed_count + " file failed: " + failure.failed_files[0];
+      elements.resultActionButton.textContent = "Prepare retry";
+      return;
+    }
+    if (status === "failed" || status === "error") {
+      elements.resultCallout.dataset.state = "failed";
+      elements.resultCalloutTitle.textContent = "Backup failed";
+      elements.resultCalloutDetail.textContent = progress.phase_detail || "The Job did not reach a safe handoff state.";
+      elements.resultActionButton.textContent = "Prepare retry";
+      return;
+    }
+    if (quality && quality.status === "needs_review") {
+      elements.resultCallout.dataset.state = "needs_review";
+      elements.resultCalloutTitle.textContent = "Backup complete, review needed";
+      elements.resultCalloutDetail.textContent = quality.issue_count + " of " + quality.total_clips + " clips need review.";
+      elements.resultActionButton.textContent = "View reports";
+      return;
+    }
+    elements.resultCallout.dataset.state = "ready";
+    elements.resultCalloutTitle.textContent = "Backup verified";
+    elements.resultCalloutDetail.textContent = "Copy, verification, and media inspection completed without a reported issue.";
+    elements.resultActionButton.textContent = "View reports";
+  }
+
+  function handleResultAction() {
+    var progress = state.progress || {};
+    if (progress.failure) {
+      setActiveView("datamanager", true);
+      return;
+    }
+    setActiveView("datahandler", true);
+  }
+
+  function normalizedJobStatus(status) {
+    var normalized = String(status || "").toLowerCase();
+    if (normalized === "review-needed" || normalized === "warn" || normalized === "needs_review") {
+      return "needs_review";
+    }
+    if (normalized === "failed" || normalized === "error") {
+      return "failed";
+    }
+    if (normalized === "completed" || normalized === "done" || normalized === "complete") {
+      return "ready";
+    }
+    if (normalized === "running" || normalized === "active") {
+      return "running";
+    }
+    return "waiting";
   }
 
   function stageLabel(stage) {
@@ -986,10 +1769,27 @@
   }
 
   function progressSubtitle(progress, status, runId) {
-    var program = progress.program || stageLabel(progress.stage || "");
+    var program = userFacingProgramName(progress.program, progress.stage);
     var detail = progress.phase_detail || ("Status: " + status + ".");
-    var updated = progress.last_progress_at ? "Last update: " + progress.last_progress_at : "";
-    return [program, detail, updated, "Run ID: " + runId].filter(Boolean).join(" / ");
+    return [program, detail].filter(Boolean).join(" / ");
+  }
+
+  function userFacingProgressTitle(title) {
+    return String(title || "")
+      .replace(/DataManager/g, "Copy and verification")
+      .replace(/DataHelper(?: \(Handler\))? reports/g, "Media inspection and reports")
+      .replace(/DataHelper(?: \(Handler\))?/g, "Media inspection");
+  }
+
+  function userFacingProgramName(program, stage) {
+    var normalized = String(program || "").toLowerCase();
+    if (normalized.indexOf("datamanager") !== -1) {
+      return "Copy and verification";
+    }
+    if (normalized.indexOf("datahelper") !== -1 || normalized.indexOf("handler") !== -1) {
+      return "Media inspection and reports";
+    }
+    return program || stageLabel(stage || "");
   }
 
   function activityLabel(progress) {
@@ -1006,12 +1806,12 @@
 
   function isTerminalStatus(status) {
     var normalized = String(status || "").toLowerCase();
-    return normalized === "completed" || normalized === "done" || normalized === "failed" || normalized === "error" || normalized === "warn" || normalized === "review-needed";
+    return normalized === "completed" || normalized === "complete" || normalized === "done" || normalized === "failed" || normalized === "error" || normalized === "warn" || normalized === "review-needed" || normalized === "needs_review";
   }
 
   function isCompletedStatus(status) {
     var normalized = String(status || "").toLowerCase();
-    return normalized === "completed" || normalized === "done";
+    return normalized === "completed" || normalized === "done" || normalized === "warn" || normalized === "review-needed";
   }
 
   function stateLabel(serverState) {
@@ -1026,13 +1826,13 @@
 
   function stateLabelFromStatus(status) {
     var normalized = String(status || "").toLowerCase();
-    if (normalized === "completed" || normalized === "done") {
+    if (normalized === "completed" || normalized === "done" || normalized === "complete" || normalized === "ready") {
       return "Complete";
     }
     if (normalized === "failed" || normalized === "error") {
       return "Failed";
     }
-    if (normalized === "warn" || normalized === "review-needed") {
+    if (normalized === "warn" || normalized === "review-needed" || normalized === "needs_review") {
       return "Needs review";
     }
     return "Active";

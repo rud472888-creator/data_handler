@@ -10,11 +10,18 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from orchestrator import run_state, stages
 from orchestrator.app_front import server as app_front_server
 from orchestrator.app_front.server import create_app
 from orchestrator.app_front.settings import SettingsStore
 from orchestrator.cli import build_parser
 from orchestrator.disks import DISKUTIL, DiskUnmountError, unmount_disk
+from orchestrator.jsonio import write_json
+from orchestrator.media_preflight import (
+    DependencyCheck,
+    MediaDependencyPreflightError,
+    MediaPreflightReport,
+)
 
 
 INVALID_SETTINGS_FILES = [
@@ -66,17 +73,259 @@ def test_app_front_exposes_manual_path_project_switcher_and_persistent_errors() 
     js = (app_front_server.STATIC_DIR / "app.js").read_text(encoding="utf-8")
 
     assert 'id="projectSwitcher"' in html
+    assert 'id="primaryActionHint"' in html
+    assert 'id="projectReadiness"' in html
+    assert 'id="sourceReadiness"' in html
+    assert 'id="replicaReadiness"' in html
+    assert 'id="stageTimeline"' in html
     assert 'id="appErrorList"' in html
-    assert 'data-view="sources"' in html
+    assert 'id="reportInspector"' in html
+    assert 'id="closeReportPreviewButton"' in html
+    assert 'id="reportPreviewFrame"' in html
+    assert 'data-view="workflow"' in html
+    assert 'data-view="datamanager"' in html
+    assert 'data-view="datahandler"' in html
+    assert 'id="runtimeNav"' not in html
+    assert 'data-view="runtime"' not in html
+    assert 'id="progressPanel" data-view-section="workflow datamanager datahandler"' in html
+    assert 'id="volumeWorkspacePanel" data-view-section="datamanager"' in html
     assert 'aria-labelledby="projectDialogTitle"' in html
     assert 'role="progressbar"' in html
     assert 'role="alert"' in html
     assert "Type or paste a local folder path" in html
     assert 'document.createElement("input")' in js
+    assert 'document.createElement("button")' in js
+    assert "Browse" in js
+    assert "pathChooser" in js
     assert "state.errors.load" in js
     assert "setActiveView" in js
+    assert "runReadiness" in js
+    assert "renderStageTimeline" in js
     assert "aria-valuenow" in js
+    assert "openReportPreview" in js
+    assert "closeReportPreview" in js
     assert '"1 active"' not in js
+
+
+def test_app_js_folder_browse_bridge_sets_selected_path() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is required for the app.js folder picker harness")
+    script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const appPath = process.argv[1];
+const elements = {};
+let pickerMessage = null;
+
+function makeElement(id, tag) {
+  const element = {
+    id,
+    tagName: String(tag || id).toUpperCase(),
+    children: [],
+    dataset: {},
+    style: {},
+    attrs: {},
+    listeners: {},
+    textContent: "",
+    hidden: false,
+    value: "",
+    className: "",
+    disabled: false,
+    classList: {
+      add: function () {},
+      remove: function () {},
+      toggle: function () {}
+    },
+    addEventListener: function (type, callback) {
+      this.listeners[type] = callback;
+    },
+    appendChild: function (child) {
+      this.children.push(child);
+      return child;
+    },
+    append: function () {
+      this.children.push.apply(this.children, Array.prototype.slice.call(arguments));
+    },
+    replaceChildren: function () {
+      this.children = [];
+    },
+    removeChild: function (child) {
+      this.children = this.children.filter(function (item) { return item !== child; });
+    },
+    get firstChild() {
+      return this.children[0] || null;
+    },
+    querySelector: function (selector) {
+      return findFirst(this, selector) || makeElement(id + selector);
+    },
+    querySelectorAll: function (selector) {
+      return findAll(this, selector);
+    },
+    setAttribute: function (name, value) {
+      this.attrs[name] = String(value);
+      if (name.indexOf("data-") === 0) {
+        const key = name.slice(5).replace(/-([a-z])/g, function (_, letter) { return letter.toUpperCase(); });
+        this.dataset[key] = String(value);
+      }
+    },
+    removeAttribute: function () {},
+    showModal: function () {},
+    close: function () {},
+    reset: function () {},
+    remove: function () {},
+    focus: function () {}
+  };
+  return element;
+}
+
+function walk(root, callback) {
+  root.children.forEach(function (child) {
+    callback(child);
+    walk(child, callback);
+  });
+}
+
+function hasClass(element, className) {
+  return String(element.className || "").split(/\s+/).indexOf(className) !== -1;
+}
+
+function findAll(root, selector) {
+  const results = [];
+  walk(root, function (element) {
+    if (selector === ".path-row" && hasClass(element, "path-row")) {
+      results.push(element);
+    }
+    if (selector === "select, input[data-path-input]" &&
+        (element.tagName === "SELECT" || (element.tagName === "INPUT" && element.attrs["data-path-input"] === "true"))) {
+      results.push(element);
+    }
+  });
+  return results;
+}
+
+function findFirst(root, selector) {
+  let result = null;
+  walk(root, function (element) {
+    if (result) {
+      return;
+    }
+    if (selector.charAt(0) === "." && hasClass(element, selector.slice(1))) {
+      result = element;
+    }
+    if (selector === "strong" && element.tagName === "STRONG") {
+      result = element;
+    }
+    if (selector === "span" && element.tagName === "SPAN") {
+      result = element;
+    }
+  });
+  return result;
+}
+
+global.window = {
+  setTimeout: setTimeout,
+  clearTimeout: clearTimeout,
+  webkit: {
+    messageHandlers: {
+      pathChooser: {
+        postMessage: function (message) {
+          pickerMessage = message;
+        }
+      }
+    }
+  }
+};
+global.document = {
+  listeners: {},
+  addEventListener: function (type, callback) {
+    this.listeners[type] = callback;
+  },
+  getElementById: function (id) {
+    if (!elements[id]) {
+      elements[id] = makeElement(id);
+    }
+    return elements[id];
+  },
+  querySelectorAll: function () {
+    return [];
+  },
+  createElement: function (tag) {
+    return makeElement(tag, tag);
+  },
+  createDocumentFragment: function () {
+    return makeElement("fragment");
+  }
+};
+global.Option = function (text, value) {
+  return { text: text, value: value };
+};
+global.FormData = function () {
+  return {
+    get: function () {
+      return "";
+    }
+  };
+};
+global.fetch = function (path) {
+  const payloads = {
+    "/api/app/state": { runtime: {}, settings: {} },
+    "/api/projects": { projects: [], runs: [] },
+    "/api/sources": { sources: [] },
+    "/api/destinations": { destinations: [] },
+    "/api/app/disks": { disks: [] }
+  };
+  return Promise.resolve({
+    ok: true,
+    text: function () {
+      return Promise.resolve(JSON.stringify(payloads[path] || {}));
+    }
+  });
+};
+
+elements.startForm = makeElement("startForm");
+elements.startForm.elements = {
+  project_id: makeElement("project_id")
+};
+elements.projectForm = makeElement("projectForm");
+elements.settingsForm = makeElement("settingsForm");
+
+vm.runInThisContext(fs.readFileSync(appPath, "utf8"), { filename: appPath });
+document.listeners.DOMContentLoaded();
+
+elements.addStartSource.listeners.click();
+const row = elements.startSourcePaths.children[0];
+const input = row.children[0];
+const browse = row.children[2];
+browse.listeners.click();
+
+if (!pickerMessage || !pickerMessage.requestId) {
+  console.error("folder picker message was not sent");
+  process.exit(1);
+}
+window.DataHandlerPathChooser.resolve({
+  requestId: pickerMessage.requestId,
+  path: "/Volumes/Extreme SSD/final_pt/image_still"
+});
+
+setTimeout(function () {
+  if (input.value !== "/Volumes/Extreme SSD/final_pt/image_still") {
+    console.error("input path was not updated: " + input.value);
+    process.exit(1);
+  }
+  process.exit(0);
+}, 0);
+"""
+
+    result = subprocess.run(
+        [node, "-e", script, str(app_front_server.STATIC_DIR / "app.js")],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
 
 
 def test_preview_roll_validation_error_renders_inline_without_throwing() -> None:
@@ -367,8 +616,8 @@ elements.projectReplicaRoots.querySelectorAll = function () {
 elements.projectForm.listeners.submit({ preventDefault: function () {} });
 
 setTimeout(function () {
-  if (elements.projectsMeta.textContent !== "1") {
-    console.error("project count did not update: " + elements.projectsMeta.textContent);
+  if (elements.workflowMeta.textContent !== "Live") {
+    console.error("workflow mode meta did not render: " + elements.workflowMeta.textContent);
     process.exit(1);
   }
   if (elements.activeProject.textContent !== "No Perfect Movie") {
@@ -573,18 +822,26 @@ setTimeout(function () {
     console.error("report metric should be 6, got " + elements.reportsMetric.textContent);
     process.exit(1);
   }
-  if (elements.overallTitle.textContent !== "DataHelper reports complete") {
+  if (elements.overallTitle.textContent !== "Media inspection and reports complete") {
     console.error("overall title did not show phase: " + elements.overallTitle.textContent);
     process.exit(1);
   }
-  if (elements.overallSubtitle.textContent.indexOf("DataHelper (Handler)") === -1 ||
+  if (elements.overallSubtitle.textContent.indexOf("Media inspection and reports") === -1 ||
       elements.overallSubtitle.textContent.indexOf("2 of 2 replica report jobs complete") === -1 ||
-      elements.overallSubtitle.textContent.indexOf("Run ID: run-1") === -1) {
-    console.error("overall subtitle did not show program/detail/run id: " + elements.overallSubtitle.textContent);
+      elements.overallSubtitle.textContent.indexOf("Run ID:") !== -1) {
+    console.error("overall subtitle did not show concise program/detail: " + elements.overallSubtitle.textContent);
     process.exit(1);
   }
-  if (elements.activeClipCount.textContent !== "Complete") {
-    console.error("activity chip should show complete, got " + elements.activeClipCount.textContent);
+  if (elements.activeClipCount.textContent !== "No telemetry") {
+    console.error("clip header should not reuse overall status, got " + elements.activeClipCount.textContent);
+    process.exit(1);
+  }
+  if (elements.clipProgressTitle.textContent !== "Not reported") {
+    console.error("clip progress should not reuse overall title: " + elements.clipProgressTitle.textContent);
+    process.exit(1);
+  }
+  if (elements.clipProgressPercent.textContent !== "--") {
+    console.error("clip progress should not reuse overall percent: " + elements.clipProgressPercent.textContent);
     process.exit(1);
   }
   const checksumText = elements.checksumReportList.children.map(function (item) {
@@ -593,12 +850,409 @@ setTimeout(function () {
   const clipText = elements.clipReportList.children.map(function (item) {
     return item.children.map(function (child) { return child.textContent; }).join(" ");
   }).join(" | ");
-  if (checksumText.indexOf("manifest json") === -1) {
+  if (checksumText.indexOf("Copy Manifest") === -1) {
     console.error("manifest was not rendered: " + checksumText);
     process.exit(1);
   }
-  if (clipText.indexOf("datahelper-path2 pdf") === -1 || clipText.indexOf("datahelper-path2 json") === -1) {
+  if (clipText.indexOf("DIT Report · Destination 2") === -1 || clipText.indexOf("Media Inspection JSON · Destination 2") === -1) {
     console.error("path2 reports were not rendered: " + clipText);
+    process.exit(1);
+  }
+  process.exit(0);
+}, 20);
+"""
+
+    result = subprocess.run(
+        [node, "-e", script, str(app_front_server.STATIC_DIR / "app.js")],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_app_js_report_preview_opens_and_closes() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is required for the app.js report preview harness")
+    script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const appPath = process.argv[1];
+const elements = {};
+
+function makeElement(id) {
+  const element = {
+    id,
+    children: [],
+    dataset: {},
+    style: {},
+    listeners: {},
+    textContent: "",
+    hidden: false,
+    value: "",
+    src: "",
+    className: "",
+    classList: {
+      add: function () {},
+      remove: function () {},
+      toggle: function () {}
+    },
+    addEventListener: function (type, callback) {
+      this.listeners[type] = callback;
+    },
+    appendChild: function (child) {
+      this.children.push(child);
+      return child;
+    },
+    append: function () {
+      this.children.push.apply(this.children, Array.prototype.slice.call(arguments));
+    },
+    replaceChildren: function () {
+      this.children = [];
+    },
+    removeChild: function (child) {
+      this.children = this.children.filter(function (item) { return item !== child; });
+    },
+    get firstChild() {
+      return this.children[0] || null;
+    },
+    querySelector: function () {
+      return makeElement(id + "-query");
+    },
+    querySelectorAll: function () {
+      return [];
+    },
+    setAttribute: function (name, value) {
+      this[name] = String(value);
+    },
+    removeAttribute: function () {},
+    showModal: function () {},
+    close: function () {},
+    reset: function () {},
+    remove: function () {},
+    focus: function () {}
+  };
+  return element;
+}
+
+elements.appShell = makeElement("appShell");
+global.window = {
+  setTimeout: setTimeout,
+  clearTimeout: clearTimeout
+};
+global.document = {
+  listeners: {},
+  addEventListener: function (type, callback) {
+    this.listeners[type] = callback;
+  },
+  getElementById: function (id) {
+    if (!elements[id]) {
+      elements[id] = makeElement(id);
+    }
+    return elements[id];
+  },
+  querySelector: function (selector) {
+    return selector === ".app-shell" ? elements.appShell : null;
+  },
+  querySelectorAll: function () {
+    return [];
+  },
+  createElement: function (tag) {
+    return makeElement(tag);
+  },
+  createDocumentFragment: function () {
+    return makeElement("fragment");
+  }
+};
+global.Option = function (text, value) {
+  return { text: text, value: value };
+};
+global.FormData = function () {
+  return {
+    get: function () {
+      return "";
+    }
+  };
+};
+
+const project = {
+  id: "project-1",
+  name: "No Perfect Movie",
+  source_paths: ["/sources/CARD_A"],
+  replica_roots: ["/replicas/path1"]
+};
+const run = {
+  project_id: "project-1",
+  run_id: "run-1",
+  shoot_date: "260601",
+  camera_unit: "A-cam",
+  roll: "R#1",
+  created_at: "2026-06-01T00:00:00Z"
+};
+const reportUrl = "/artifacts/run-1/datahelper-path1.pdf";
+
+global.fetch = function (path) {
+  const payloads = {
+    "/api/app/state": { runtime: {}, settings: {} },
+    "/api/projects": { projects: [project], runs: [run] },
+    "/api/sources": { sources: [] },
+    "/api/destinations": { destinations: [] },
+    "/api/app/disks": { disks: [] },
+    "/api/runs/run-1": {
+      run: run,
+      project: project,
+      progress: { stage: "done", status: "completed" },
+      artifacts: [{ name: "datahelper-path1 pdf", kind: "pdf", url: reportUrl }]
+    }
+  };
+  return Promise.resolve({
+    ok: true,
+    text: function () {
+      return Promise.resolve(JSON.stringify(payloads[path] || {}));
+    }
+  });
+};
+
+elements.startForm = makeElement("startForm");
+elements.startForm.elements = {
+  project_id: makeElement("project_id")
+};
+elements.projectForm = makeElement("projectForm");
+elements.settingsForm = makeElement("settingsForm");
+
+vm.runInThisContext(fs.readFileSync(appPath, "utf8"), { filename: appPath });
+document.listeners.DOMContentLoaded();
+
+setTimeout(function () {
+  const item = elements.clipReportList.children[0];
+  const link = item && item.children[1];
+  if (!link || !link.listeners.click) {
+    console.error("report link was not wired for preview");
+    process.exit(1);
+  }
+  link.listeners.click({ preventDefault: function () {} });
+  if (elements.reportPreviewFrame.src !== reportUrl) {
+    console.error("preview frame did not open report: " + elements.reportPreviewFrame.src);
+    process.exit(1);
+  }
+  if (elements.reportInspector.hidden !== false || elements.appShell.dataset.inspectorOpen !== "true") {
+    console.error("preview inspector did not open");
+    process.exit(1);
+  }
+  elements.closeReportPreviewButton.listeners.click();
+  if (elements.reportPreviewFrame.src !== "" || elements.reportInspector.hidden !== true) {
+    console.error("preview inspector did not close");
+    process.exit(1);
+  }
+  process.exit(0);
+}, 20);
+"""
+
+    result = subprocess.run(
+        [node, "-e", script, str(app_front_server.STATIC_DIR / "app.js")],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_app_js_datahelper_does_not_render_copy_percent_as_report_progress() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is required for the app.js progress harness")
+    script = r"""
+const fs = require("fs");
+const vm = require("vm");
+const appPath = process.argv[1];
+const elements = {};
+
+function makeElement(id) {
+  const element = {
+    id,
+    children: [],
+    dataset: {},
+    style: {},
+    listeners: {},
+    textContent: "",
+    hidden: false,
+    value: "",
+    className: "",
+    classList: {
+      add: function () {},
+      remove: function () {},
+      toggle: function () {}
+    },
+    addEventListener: function (type, callback) {
+      this.listeners[type] = callback;
+    },
+    appendChild: function (child) {
+      this.children.push(child);
+      return child;
+    },
+    append: function () {
+      this.children.push.apply(this.children, Array.prototype.slice.call(arguments));
+    },
+    replaceChildren: function () {
+      this.children = [];
+    },
+    removeChild: function (child) {
+      this.children = this.children.filter(function (item) { return item !== child; });
+    },
+    get firstChild() {
+      return this.children[0] || null;
+    },
+    querySelector: function (selector) {
+      if (!this._queries) {
+        this._queries = {};
+      }
+      if (!this._queries[selector]) {
+        this._queries[selector] = makeElement(id + selector);
+      }
+      return this._queries[selector];
+    },
+    querySelectorAll: function () {
+      return [];
+    },
+    setAttribute: function () {},
+    showModal: function () {},
+    close: function () {},
+    reset: function () {},
+    remove: function () {}
+  };
+  return element;
+}
+
+global.window = {
+  setTimeout: setTimeout,
+  clearTimeout: clearTimeout
+};
+global.document = {
+  listeners: {},
+  addEventListener: function (type, callback) {
+    this.listeners[type] = callback;
+  },
+  getElementById: function (id) {
+    if (!elements[id]) {
+      elements[id] = makeElement(id);
+    }
+    return elements[id];
+  },
+  querySelectorAll: function () {
+    return [];
+  },
+  createElement: function (tag) {
+    return makeElement(tag);
+  },
+  createDocumentFragment: function () {
+    return makeElement("fragment");
+  }
+};
+global.Option = function (text, value) {
+  return { text: text, value: value };
+};
+global.FormData = function () {
+  return {
+    get: function () {
+      return "";
+    }
+  };
+};
+
+const project = {
+  id: "project-1",
+  name: "No Perfect Movie",
+  source_paths: ["/sources/CARD_A"],
+  replica_roots: ["/replicas/path1"]
+};
+const run = {
+  project_id: "project-1",
+  run_id: "run-1",
+  shoot_date: "260601",
+  camera_unit: "A-cam",
+  roll: "R#1",
+  created_at: "2026-06-01T00:00:00Z"
+};
+
+global.fetch = function (path) {
+  const payloads = {
+    "/api/app/state": { runtime: {}, settings: {} },
+    "/api/projects": { projects: [project], runs: [run] },
+    "/api/sources": { sources: [] },
+    "/api/destinations": { destinations: [] },
+    "/api/app/disks": { disks: [] },
+    "/api/runs/run-1": {
+      run: run,
+      project: project,
+      progress: {
+        stage: "datahelper",
+        status: "running",
+        percent: 49,
+        copy_progress: {
+          available: true,
+          unit: "bytes",
+          bytes_observed: 49,
+          bytes_total: 100,
+          byte_percent: 49,
+          copied_files: 3,
+          total_files: 83,
+          replica_count: 1
+        },
+        report_progress: { available: false, percent: null },
+        clip_progress: { available: false },
+        overall_progress: {
+          kind: "report_jobs",
+          percent: null,
+          title: "DataHelper generating reports",
+          subtitle: "DataHelper is running; no report progress yet."
+        },
+        program: "DataHelper (Handler)",
+        phase_label: "DataHelper generating reports",
+        phase_detail: "DataHelper is running; no report progress yet.",
+        activity_state: "running"
+      },
+      artifacts: []
+    }
+  };
+  return Promise.resolve({
+    ok: true,
+    text: function () {
+      return Promise.resolve(JSON.stringify(payloads[path] || {}));
+    }
+  });
+};
+
+elements.startForm = makeElement("startForm");
+elements.startForm.elements = {
+  project_id: makeElement("project_id")
+};
+elements.projectForm = makeElement("projectForm");
+elements.settingsForm = makeElement("settingsForm");
+
+vm.runInThisContext(fs.readFileSync(appPath, "utf8"), { filename: appPath });
+document.listeners.DOMContentLoaded();
+
+setTimeout(function () {
+  if (elements.overallTitle.textContent !== "Media inspection generating reports") {
+    console.error("overall title should show report phase: " + elements.overallTitle.textContent);
+    process.exit(1);
+  }
+  if (elements.overallPercent.textContent === "49%" || elements.overallPercent.textContent === "49% bytes observed") {
+    console.error("overall percent reused copy percent: " + elements.overallPercent.textContent);
+    process.exit(1);
+  }
+  if (elements.copiedMetric.textContent !== "3/83") {
+    console.error("copy file metric should preserve file units: " + elements.copiedMetric.textContent);
+    process.exit(1);
+  }
+  if (elements.clipProgressPercent.textContent !== "--" ||
+      elements.clipProgressTitle.textContent !== "Not reported") {
+    console.error("clip progress reused another panel: " + elements.clipProgressTitle.textContent + " " + elements.clipProgressPercent.textContent);
     process.exit(1);
   }
   process.exit(0);
@@ -785,8 +1439,12 @@ setTimeout(function () {
     console.error("failed run should not render as recorded: " + JSON.stringify(rows));
     process.exit(1);
   }
-  if (!completed || completed.meta !== "recorded") {
+  if (!completed || completed.meta !== "Complete") {
     console.error("completed run should render as recorded: " + JSON.stringify(rows));
+    process.exit(1);
+  }
+  if (elements.overallPercent.textContent !== "Failed") {
+    console.error("unknown failed progress should not render as zero: " + elements.overallPercent.textContent);
     process.exit(1);
   }
   process.exit(0);
@@ -905,6 +1563,183 @@ def test_app_front_run_create_uses_real_orchestrator_api(monkeypatch: pytest.Mon
     assert starts[0]["project_name"] == "No Perfect Movie"
     assert starts[0]["source_paths"] == (source,)
     assert starts[0]["replica_paths"] == (path1, path2)
+    assert starts[0]["run_mode"] == "workflow"
+
+
+def test_app_front_run_create_can_start_datamanager_only(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "sources"
+    source = source_root / "CARD_A"
+    source.mkdir(parents=True)
+    path1, path2 = tmp_path / "path1", tmp_path / "path2"
+    path1.mkdir()
+    path2.mkdir()
+    app = create_app(
+        settings_store=SettingsStore(tmp_path / "settings.json"),
+        registry_path=tmp_path / "registry.json",
+        source_roots=(source_root,),
+        runs_root=tmp_path / "runs",
+    )
+    client = TestClient(app)
+    project = client.post(
+        "/api/projects",
+        json={"name": "No Perfect Movie", "replica_roots": [str(path1), str(path2)]},
+    ).json()["project"]
+    starts: list[dict[str, object]] = []
+    monkeypatch.setattr("orchestrator.app_front.server.start_run", lambda **kwargs: starts.append(kwargs) or "run-test")
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "project_id": project["id"],
+            "shoot_date": "260528",
+            "camera_unit": "A-cam",
+            "source_paths": [str(source)],
+            "replica_roots": [str(path1), str(path2)],
+            "run_mode": "datamanager",
+        },
+    )
+
+    assert response.status_code == 200
+    assert starts[0]["run_mode"] == "datamanager"
+    run = client.get("/api/projects").json()["runs"][0]
+    assert run["run_mode"] == "datamanager"
+
+
+def test_app_front_datahandler_starts_from_selected_datamanager_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runs_root = tmp_path / "runs"
+    monkeypatch.setattr(run_state, "RUNS_ROOT", runs_root)
+    source_root = tmp_path / "sources"
+    source = source_root / "CARD_A"
+    source.mkdir(parents=True)
+    path1, path2 = tmp_path / "path1", tmp_path / "path2"
+    path1.mkdir()
+    path2.mkdir()
+    app = create_app(
+        settings_store=SettingsStore(tmp_path / "settings.json"),
+        registry_path=tmp_path / "registry.json",
+        source_roots=(source_root,),
+        runs_root=runs_root,
+    )
+    client = TestClient(app)
+    project = client.post(
+        "/api/projects",
+        json={"name": "No Perfect Movie", "replica_roots": [str(path1), str(path2)]},
+    ).json()["project"]
+    starts: list[dict[str, object]] = []
+    monkeypatch.setattr("orchestrator.app_front.server.start_run", lambda **kwargs: starts.append(kwargs) or str(kwargs["run_id"]))
+    run_response = client.post(
+        "/api/runs",
+        json={
+            "project_id": project["id"],
+            "shoot_date": "260528",
+            "camera_unit": "A-cam",
+            "source_paths": [str(source)],
+            "replica_roots": [str(path1), str(path2)],
+            "run_mode": "datamanager",
+        },
+    )
+    run_id = run_response.json()["run_id"]
+    write_json(
+        run_state.events_dir(run_id) / "datamanager.done.json",
+        {
+            "run_id": run_id,
+            "status": "completed",
+            "replica_project_roots": {"path1": str(path1 / "No Perfect Movie")},
+        },
+    )
+    (path1 / "No Perfect Movie" / "01_Footage").mkdir(parents=True, exist_ok=True)
+    datahelper_starts: list[tuple[str, str, tuple[str, ...]]] = []
+    monkeypatch.setattr(
+        stages,
+        "spawn_python_module",
+        lambda active_run_id, module, *args: datahelper_starts.append((active_run_id, module, args)) or 4321,
+    )
+
+    response = client.post(f"/api/runs/{run_id}/datahandler", json={})
+
+    assert response.status_code == 200
+    assert response.json()["stage"] == "datahelper"
+    assert datahelper_starts == [(run_id, "orchestrator.datahelper_worker", (run_id,))]
+    assert (run_state.events_dir(run_id) / "datahelper.started.json").is_file()
+
+
+def test_app_front_datahandler_dependency_failure_returns_actionable_400(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runs_root = tmp_path / "runs"
+    monkeypatch.setattr(run_state, "RUNS_ROOT", runs_root)
+    source_root = tmp_path / "sources"
+    source = source_root / "CARD_A"
+    source.mkdir(parents=True)
+    replica = tmp_path / "replica"
+    replica.mkdir()
+    app = create_app(
+        settings_store=SettingsStore(tmp_path / "settings.json"),
+        registry_path=tmp_path / "registry.json",
+        source_roots=(source_root,),
+        runs_root=runs_root,
+    )
+    client = TestClient(app)
+    project = client.post(
+        "/api/projects",
+        json={"name": "R3D Project", "replica_roots": [str(replica)]},
+    ).json()["project"]
+    monkeypatch.setattr(
+        app_front_server,
+        "start_run",
+        lambda **kwargs: str(kwargs["run_id"]),
+    )
+    run_id = client.post(
+        "/api/runs",
+        json={
+            "project_id": project["id"],
+            "shoot_date": "260814",
+            "camera_unit": "A",
+            "source_paths": [str(source)],
+            "replica_roots": [str(replica)],
+            "run_mode": "datamanager",
+        },
+    ).json()["run_id"]
+    write_json(
+        run_state.events_dir(run_id) / "datamanager.done.json",
+        {
+            "run_id": run_id,
+            "status": "completed",
+            "replica_project_roots": {"path1": str(replica / "R3D Project")},
+        },
+    )
+    report = MediaPreflightReport(
+        source_paths=(str(replica / "R3D Project" / "01_Footage"),),
+        file_counts={"standard": 0, "braw": 0, "r3d": 1, "arriraw": 0},
+        checks=(
+            DependencyCheck(
+                family="r3d",
+                dependency="r3d_adapter",
+                state="dependency_missing",
+                resolved_path=None,
+                message="REDR3D.dylib is missing.",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        app_front_server,
+        "start_datahelper_stage",
+        lambda run_id, *, trigger: (_ for _ in ()).throw(
+            MediaDependencyPreflightError(report)
+        ),
+    )
+
+    response = client.post(f"/api/runs/{run_id}/datahandler", json={})
+
+    assert response.status_code == 400
+    assert "REDR3D.dylib is missing" in response.json()["detail"]
 
 
 def test_app_front_run_create_writes_real_run_artifacts_in_isolated_pipeline_root(
@@ -985,6 +1820,7 @@ state_payload = json.loads(state_path.read_text(encoding="utf-8"))
 registry_payload = json.loads((pipeline_root / "registry.json").read_text(encoding="utf-8"))
 assert request_payload["source_paths"] == [str(source_a.resolve()), str(source_b.resolve())]
 assert request_payload["replica_roots"] == [str(dest_a.resolve()), str(dest_b.resolve())]
+assert request_payload["run_mode"] == "workflow"
 assert state_payload["stage"] == "datamanager"
 assert state_payload["status"] == "spawned"
 assert stdout_log.is_file()
@@ -1159,6 +1995,112 @@ def test_run_detail_syncs_completed_datahelper_progress_to_registry_status(tmp_p
     assert response.json()["progress"]["status"] == "completed"
     assert response.json()["run"]["status"] == "completed"
     assert ConsoleRegistry(registry_path).load()["runs"][0]["status"] == "completed"
+
+
+def test_run_detail_syncs_warn_progress_to_registry_review_status(tmp_path: Path) -> None:
+    from orchestrator.jsonio import write_json
+    from orchestrator.web.registry import ConsoleRegistry
+
+    source_root = tmp_path / "sources"
+    source = source_root / "CARD_A"
+    source.mkdir(parents=True)
+    path1 = tmp_path / "path1"
+    path1.mkdir()
+    registry_path = tmp_path / "registry.json"
+    runs_root = tmp_path / "runs"
+    app = create_app(
+        settings_store=SettingsStore(tmp_path / "settings.json"),
+        registry_path=registry_path,
+        source_roots=(source_root,),
+        runs_root=runs_root,
+    )
+    client = TestClient(app)
+    project = client.post(
+        "/api/projects",
+        json={"name": "No Perfect Movie", "replica_roots": [str(path1)]},
+    ).json()["project"]
+    registry = ConsoleRegistry(registry_path)
+    registry.reserve_run(
+        project_id=project["id"],
+        shoot_date="260528",
+        camera_unit="A-cam",
+        run_id="run-review",
+        source_path=str(source),
+    )
+    registry.mark_run_started("run-review")
+    run_dir = runs_root / "run-review"
+    run_dir.mkdir(parents=True)
+    write_json(
+        run_dir / "progress.json",
+        {
+            "run_id": "run-review",
+            "stage": "datahelper",
+            "status": "warn",
+            "report_completed": 1,
+            "report_total": 1,
+        },
+    )
+
+    response = client.get("/api/runs/run-review")
+
+    assert response.status_code == 200
+    assert response.json()["progress"]["status"] == "warn"
+    assert response.json()["run"]["status"] == "review-needed"
+    assert ConsoleRegistry(registry_path).load()["runs"][0]["status"] == "review-needed"
+
+
+def test_run_progress_sync_ignores_unavailable_manifest_volume(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from orchestrator.jsonio import write_json
+    from orchestrator.web import registry as registry_module
+    from orchestrator.web.registry import ConsoleRegistry
+
+    source_root = tmp_path / "sources"
+    source = source_root / "CARD_A"
+    source.mkdir(parents=True)
+    path1 = tmp_path / "path1"
+    path1.mkdir()
+    registry_path = tmp_path / "registry.json"
+    runs_root = tmp_path / "runs"
+    app = create_app(
+        settings_store=SettingsStore(tmp_path / "settings.json"),
+        registry_path=registry_path,
+        source_roots=(source_root,),
+        runs_root=runs_root,
+    )
+    client = TestClient(app)
+    project = client.post(
+        "/api/projects",
+        json={"name": "No Perfect Movie", "replica_roots": [str(path1)]},
+    ).json()["project"]
+    registry = ConsoleRegistry(registry_path)
+    registry.reserve_run(
+        project_id=project["id"],
+        shoot_date="260528",
+        camera_unit="A-cam",
+        run_id="run-failed",
+        source_path=str(source),
+    )
+    run_dir = runs_root / "run-failed"
+    run_dir.mkdir(parents=True)
+    write_json(
+        run_dir / "state.json",
+        {"run_id": "run-failed", "stage": "datamanager", "status": "failed"},
+    )
+
+    def fail_manifest(*_args: object) -> None:
+        raise PermissionError("replica volume is unavailable")
+
+    monkeypatch.setattr(registry_module, "_write_project_manifest", fail_manifest)
+
+    response = client.get("/api/runs/run-failed/progress")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json()["status"] == "failed"
+    assert ConsoleRegistry(registry_path).load()["runs"][0]["status"] == "failed"
 
 
 def test_settings_round_trip(tmp_path: Path) -> None:

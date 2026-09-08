@@ -15,8 +15,10 @@ from orchestrator import paths
 from orchestrator.app_front.settings import AppSettings, SettingsError, SettingsStore
 from orchestrator.cli import start_run
 from orchestrator.disks import DiskUnmountError, MOUNT_ROOT, list_mounted_disks, unmount_disk
-from orchestrator.spec import SpecError
-from orchestrator.web.progress import list_artifacts, load_run_progress
+from orchestrator.media_preflight import MediaDependencyPreflightError
+from orchestrator.spec import RUN_MODE_DATAMANAGER, RUN_MODE_WORKFLOW, SpecError
+from orchestrator.stages import datahelper_start_status, start_datahelper_stage
+from orchestrator.web.progress import list_artifacts, list_declared_artifacts, load_run_progress
 from orchestrator.web.registry import ConsoleRegistry, create_project
 from orchestrator.web.sources import list_source_candidates
 
@@ -39,6 +41,7 @@ class RunCreatePayload(BaseModel):
     source_paths: list[str] | None = None
     replica_roots: list[str] | None = None
     profile: str = paths.DEFAULT_HERMES_PROFILE
+    run_mode: str = RUN_MODE_WORKFLOW
 
 
 class RollPreviewPayload(BaseModel):
@@ -230,6 +233,7 @@ def create_app(
     def create_run(payload: RunCreatePayload) -> dict[str, str]:
         registry_payload = registry.load()
         project = _find_project(registry_payload, payload.project_id)
+        run_mode = _startable_run_mode(payload.run_mode)
         sources = _validated_source_paths(payload, active_source_roots)
         replica_roots = _selected_replica_roots(project, payload.replica_roots)
         _validate_replica_roots(replica_roots, sources)
@@ -242,6 +246,7 @@ def create_app(
             source_path=str(sources[0]),
             source_paths=tuple(str(source) for source in sources),
             replica_roots=replica_roots,
+            run_mode=run_mode,
         )
         try:
             start_run(
@@ -251,12 +256,37 @@ def create_app(
                 profile=payload.profile,
                 run_id=run_id,
                 footage_run_name=f"{payload.shoot_date}/{payload.camera_unit}/{record.roll}",
+                run_mode=run_mode,
             )
+        except MediaDependencyPreflightError as exc:
+            registry.mark_run_failed(run_id, str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             registry.mark_run_failed(run_id, str(exc))
             raise HTTPException(status_code=500, detail=f"failed to start run: {exc}") from exc
         registry.mark_run_started(run_id)
         return {"run_id": run_id, "roll": record.roll}
+
+    @app.post("/api/runs/{run_id}/datahandler")
+    def start_datahandler(run_id: str) -> dict[str, Any]:
+        payload = registry.load()
+        if not any(isinstance(run, dict) and run.get("run_id") == run_id for run in payload.get("runs", [])):
+            raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+        _safe_run_dir(active_runs_root, run_id)
+        status = datahelper_start_status(run_id)
+        if status["datahelper_done"]:
+            raise HTTPException(status_code=409, detail="DataHandler has already completed for this run")
+        if status["datahelper_started"]:
+            raise HTTPException(status_code=409, detail="DataHandler has already started for this run")
+        if not status["ready"]:
+            raise HTTPException(status_code=400, detail=status["reason"])
+        try:
+            pid = start_datahelper_stage(run_id, trigger="datahandler_api")
+        except MediaDependencyPreflightError as exc:
+            registry.mark_run_failed(run_id, str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        registry.mark_run_started(run_id)
+        return {"run_id": run_id, "stage": "datahelper", "status": "started", "pid": pid}
 
     @app.get("/api/runs/{run_id}")
     def run_detail(run_id: str) -> dict[str, Any]:
@@ -270,10 +300,10 @@ def create_app(
                     "run": run,
                     "project": project,
                     "progress": progress,
-                    "artifacts": [
-                        _artifact_payload(run_id, artifact)
-                        for artifact in _safe_artifacts(_safe_run_dir(active_runs_root, run_id))
-                    ],
+                    "artifacts": _artifact_payloads(
+                        run_id,
+                        _safe_run_dir(active_runs_root, run_id),
+                    ),
                 }
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
 
@@ -286,12 +316,7 @@ def create_app(
     @app.get("/api/runs/{run_id}/artifacts")
     def run_artifacts(run_id: str) -> dict[str, Any]:
         run_dir = _safe_run_dir(active_runs_root, run_id)
-        return {
-            "artifacts": [
-                _artifact_payload(run_id, artifact)
-                for artifact in _safe_artifacts(run_dir)
-            ]
-        }
+        return {"artifacts": _artifact_payloads(run_id, run_dir)}
 
     @app.get("/artifacts/{run_id}/{artifact_name}", include_in_schema=False)
     def artifact_file(run_id: str, artifact_name: str) -> FileResponse:
@@ -475,6 +500,15 @@ def _validated_source_paths(payload: RunCreatePayload, source_roots: tuple[Path,
     return sources
 
 
+def _startable_run_mode(value: str) -> str:
+    mode = str(value or RUN_MODE_WORKFLOW).lower()
+    if mode == "datahandler":
+        raise HTTPException(status_code=400, detail="DataHandler mode requires a selected DataManager run")
+    if mode not in {RUN_MODE_WORKFLOW, RUN_MODE_DATAMANAGER}:
+        raise HTTPException(status_code=400, detail=f"unsupported run mode: {value}")
+    return mode
+
+
 def _selected_replica_roots(
     project: dict[str, Any],
     requested_roots: list[str] | None,
@@ -517,12 +551,46 @@ def _safe_run_dir(runs_root: Path, run_id: str) -> Path:
     return run_dir
 
 
-def _artifact_payload(run_id: str, artifact: dict[str, str]) -> dict[str, str]:
+def _artifact_payload(
+    run_id: str,
+    artifact: dict[str, str],
+    *,
+    availability: str = "available",
+) -> dict[str, Any]:
     path = Path(artifact["path"])
     return {
         **artifact,
-        "url": f"/artifacts/{run_id}/{path.name}",
+        "availability": availability,
+        "available": availability == "available",
+        "url": f"/artifacts/{run_id}/{path.name}" if availability == "available" else None,
     }
+
+
+def _artifact_payloads(run_id: str, run_dir: Path) -> list[dict[str, Any]]:
+    allowed_roots = _artifact_allowed_roots(run_dir)
+    payloads: list[dict[str, Any]] = []
+    for artifact in list_declared_artifacts(run_dir):
+        artifact_path = Path(artifact["path"]).resolve()
+        matching_root = next(
+            (root for root in allowed_roots if _path_within(artifact_path, root)),
+            None,
+        )
+        if matching_root is None:
+            continue
+        if artifact_path.is_file() and artifact_path.stat().st_size > 0:
+            availability = "available"
+        elif matching_root.exists():
+            availability = "missing"
+        else:
+            availability = "destination_offline"
+        payloads.append(
+            _artifact_payload(
+                run_id,
+                {**artifact, "path": str(artifact_path)},
+                availability=availability,
+            )
+        )
+    return payloads
 
 
 def _safe_artifacts(run_dir: Path) -> list[dict[str, str]]:
@@ -557,28 +625,62 @@ def _path_within(path: Path, root: Path) -> bool:
 
 
 def _progress_with_steps(progress: dict[str, Any]) -> dict[str, Any]:
-    if "steps" in progress:
-        return progress
     status = str(progress.get("status", ""))
-    payload = {
-        **progress,
-        "steps": _steps_for_stage(str(progress.get("stage", "")), status),
-    }
-    if "percent" not in payload:
-        percent = _percent_from_progress(progress)
-        if percent is not None:
-            payload["percent"] = percent
+    payload = dict(progress)
+    if "steps" not in payload:
+        payload["steps"] = _steps_for_stage(str(progress.get("stage", "")), status)
+    quality = payload.get("quality")
+    if isinstance(quality, dict) and quality.get("status") == "needs_review":
+        payload["steps"] = [
+            {
+                **step,
+                "status": "needs_review"
+                if str(step.get("name")) in {"reports", "done"}
+                else step.get("status"),
+            }
+            for step in payload["steps"]
+        ]
+    percent = _percent_from_progress(payload)
+    if percent is not None:
+        payload["percent"] = percent
     if status in {"failed", "error", "review-needed"} and "percent" not in payload:
         payload["percent"] = 0
     return payload
 
 
 def _percent_from_progress(progress: dict[str, Any]) -> int | None:
-    current = _number(progress.get("current"))
-    total = _number(progress.get("total"))
-    if current is not None and total and total > 0:
-        return max(0, min(100, round((current / total) * 100)))
-    completed = _number(progress.get("completed") or progress.get("report_completed"))
+    overall = progress.get("overall_progress")
+    if isinstance(overall, dict):
+        percent = _number(overall.get("percent"))
+        if percent is not None:
+            return max(0, min(100, round(percent)))
+    stage = str(progress.get("stage", ""))
+    if stage in {"datahelper", "reports"}:
+        report = progress.get("report_progress")
+        if isinstance(report, dict):
+            percent = _number(report.get("percent"))
+            if percent is not None:
+                return max(0, min(100, round(percent)))
+        completed = _number(progress.get("report_completed") or progress.get("completed"))
+        report_total = _number(progress.get("report_total") or progress.get("total"))
+        if completed is not None and report_total and report_total > 0:
+            return max(0, min(100, round((completed / report_total) * 100)))
+        return None
+    if stage in {"copy", "datamanager", "copy-checksum"}:
+        copy_progress = progress.get("copy_progress")
+        if isinstance(copy_progress, dict):
+            percent = _number(copy_progress.get("byte_percent"))
+            if percent is not None:
+                return max(0, min(100, round(percent)))
+        current = _number(progress.get("current"))
+        total = _number(progress.get("total"))
+        if current is not None and total and total > 0:
+            return max(0, min(100, round((current / total) * 100)))
+        return None
+    status = str(progress.get("status", "")).lower()
+    if status in {"completed", "done"}:
+        return 100
+    completed = _number(progress.get("report_completed"))
     report_total = _number(progress.get("report_total"))
     if completed is not None and report_total and report_total > 0:
         return max(0, min(100, round((completed / report_total) * 100)))
@@ -605,13 +707,23 @@ def _steps_for_stage(stage: str, status: str) -> list[dict[str, str]]:
         active = "done"
     else:
         active = "setup"
-    completed = status in {"completed", "done"}
-    failed = status in {"failed", "error", "review-needed"}
+    normalized_status = status.lower()
+    completed = normalized_status in {"completed", "done"}
+    failed = normalized_status in {"failed", "error"}
+    needs_review = normalized_status in {"warn", "review-needed", "needs_review"}
     steps: list[dict[str, str]] = []
     active_seen = False
-    for name in names:
+    active_index = names.index(active)
+    for index, name in enumerate(names):
         if failed:
-            state = "failed" if name == active else "pending"
+            if index < active_index:
+                state = "done"
+            elif name == active:
+                state = "failed"
+            else:
+                state = "blocked"
+        elif needs_review:
+            state = "needs_review" if name in {active, "done"} else "done"
         elif completed:
             state = "done"
         elif name == active:

@@ -1,5 +1,7 @@
 # Data Handler 사용법
 
+새 기본 화면은 프로젝트·촬영일·카드를 중심으로 구성한 DIT 작업 공간입니다. 새 프로젝트 생성, 카드 가져오기, 검증 결과와 앱 내 PDF 미리보기는 [DIT 작업 공간 사용법](orchestrator/dit_app/README.md)을 참고하세요. 아래의 `New / Review`, `Runs` 등은 이전 화면 설명입니다.
+
 Data Handler는 촬영 원본을 여러 위치로 복제하고, 복제 결과와 클립 검수 리포트를 같은 실행 기록 안에 남기는 로컬 운영 도구입니다. 최상위 `orchestrator`가 `DataManager`로 복제를 시작하고, 완료 이벤트가 생기면 `DataHelper` 검수 단계를 한 번만 이어서 실행합니다.
 
 ## 기본 흐름

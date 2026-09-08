@@ -11,6 +11,12 @@ class SpecError(ValueError):
     """Raised when an approved pipeline request is unsafe or incomplete."""
 
 
+RUN_MODE_WORKFLOW = "workflow"
+RUN_MODE_DATAMANAGER = "datamanager"
+RUN_MODE_DATAHELPER = "datahelper"
+RUN_MODES = frozenset({RUN_MODE_WORKFLOW, RUN_MODE_DATAMANAGER, RUN_MODE_DATAHELPER})
+
+
 @dataclass(frozen=True)
 class RunSpec:
     run_id: str
@@ -20,6 +26,8 @@ class RunSpec:
     hermes_profile: str = DEFAULT_HERMES_PROFILE
     footage_run_name: str | None = None
     extra_source_paths: tuple[Path, ...] = ()
+    run_mode: str = RUN_MODE_WORKFLOW
+    flat_card_layout: bool = False
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "RunSpec":
@@ -40,6 +48,8 @@ class RunSpec:
                 str(payload["footage_run_name"]) if payload.get("footage_run_name") else None
             ),
             extra_source_paths=source_paths[1:],
+            run_mode=str(payload.get("run_mode") or RUN_MODE_WORKFLOW),
+            flat_card_layout=payload.get("flat_card_layout") is True,
         )
 
     @property
@@ -55,14 +65,20 @@ class RunSpec:
             "replica_roots": [str(path.resolve()) for path in self.replica_roots],
             "hermes_profile": self.hermes_profile,
             "footage_run_name": self.footage_run_name,
+            "run_mode": self.run_mode,
+            "flat_card_layout": self.flat_card_layout,
         }
 
     def validate(self) -> None:
         if not self.run_id.strip():
             raise SpecError("run_id is required")
+        if self.run_mode not in RUN_MODES:
+            raise SpecError(f"unsupported run_mode: {self.run_mode}")
         _validate_project_name(self.project_name)
         sources = tuple(path.resolve() for path in self.source_paths)
         replicas = tuple(path.resolve() for path in self.replica_roots)
+        if self.flat_card_layout and len(sources) != 1:
+            raise SpecError("flat card layout requires exactly one source folder")
         if not sources:
             raise SpecError("at least one source path is required")
         if len(set(sources)) != len(sources):

@@ -61,18 +61,21 @@ class ConsoleRegistry:
         shoot_date: str,
         camera_unit: str,
         replica_roots: tuple[Path, ...] | None = None,
+        flat_card_layout: bool = False,
     ) -> dict[str, Any]:
         with self._locked():
             payload = self.load()
             project = _find_project_payload(payload, project_id)
+            if project.get("removed_at"):
+                raise SpecError("project has been removed from the library")
             roll_project = _project_with_replica_roots(project, replica_roots)
-            roll = _next_roll(payload, roll_project, shoot_date, camera_unit)
+            roll = _next_roll(payload, roll_project, shoot_date, camera_unit, flat_card_layout)
             return {
                 "project": project,
                 "shoot_date": shoot_date,
                 "camera_unit": camera_unit,
                 "roll": roll,
-                "footage_run_name": f"{shoot_date}/{camera_unit}/{roll}",
+                "footage_run_name": roll if flat_card_layout else f"{shoot_date}/{camera_unit}/{roll}",
             }
 
     def find_project(self, project_id: str) -> dict[str, Any] | None:
@@ -119,13 +122,17 @@ class ConsoleRegistry:
         source_path: str,
         source_paths: tuple[str, ...] | None = None,
         replica_roots: tuple[Path, ...] | None = None,
+        run_mode: str = "workflow",
+        flat_card_layout: bool = False,
     ) -> ConsoleRunRecord:
         with self._locked():
             payload = self.load()
             project = _find_project_payload(payload, project_id)
+            if project.get("removed_at"):
+                raise SpecError("project has been removed from the library")
             roll_project = _project_with_replica_roots(project, replica_roots)
             active_source_paths = source_paths or (source_path,)
-            roll = _next_roll(payload, roll_project, shoot_date, camera_unit)
+            roll = _next_roll(payload, roll_project, shoot_date, camera_unit, flat_card_layout)
             record = ConsoleRunRecord(
                 project_id=project_id,
                 shoot_date=shoot_date,
@@ -135,6 +142,7 @@ class ConsoleRegistry:
                 source_path=active_source_paths[0],
                 source_paths=active_source_paths,
                 created_at=utc_now(),
+                run_mode=run_mode,
             )
             payload["runs"].append(record.to_payload())
             payload["runs"][-1]["status"] = "reserved"
@@ -176,7 +184,11 @@ class ConsoleRegistry:
             self.save(payload)
             if project_id:
                 project = _find_project_payload(payload, project_id)
-                _write_project_manifest(_project_from_payload(project), payload)
+                try:
+                    _write_project_manifest(_project_from_payload(project), payload)
+                except OSError:
+                    # Replica volumes can disappear after project creation; local status remains authoritative.
+                    pass
 
     def _refresh_project_manifest(self, project_id: str) -> None:
         payload = self.load()
@@ -289,6 +301,8 @@ def _registry_status_from_progress(progress: dict[str, Any]) -> str | None:
         return "review-needed"
     if status in {"completed", "done"} and stage in {"done", "datahelper", "reports"}:
         return "completed"
+    if status in {"completed", "done"} and stage == "datamanager" and progress.get("run_mode") == "datamanager":
+        return "completed"
     return None
 
 
@@ -311,25 +325,26 @@ def _next_roll(
     project: dict[str, Any],
     shoot_date: str,
     camera_unit: str,
+    flat_card_layout: bool = False,
 ) -> str:
     used: list[int] = []
     project_id = str(project["id"])
     for run in payload.get("runs", []):
         if (
             run.get("project_id") == project_id
-            and run.get("shoot_date") == shoot_date
-            and run.get("camera_unit") == camera_unit
+            and (flat_card_layout or (run.get("shoot_date") == shoot_date
+            and run.get("camera_unit") == camera_unit))
         ):
             match = re.fullmatch(r"R#(\d+)", str(run.get("roll", "")))
             if match:
                 used.append(int(match.group(1)))
     for root in project["replica_project_roots"]:
-        used.extend(_existing_roll_numbers(Path(str(root)), shoot_date, camera_unit))
+        used.extend(_existing_roll_numbers(Path(str(root)), shoot_date, camera_unit, flat_card_layout))
     return f"R#{max(used, default=0) + 1}"
 
 
-def _existing_roll_numbers(project_root: Path, shoot_date: str, camera_unit: str) -> list[int]:
-    roll_root = project_root / "01_Footage" / shoot_date / camera_unit
+def _existing_roll_numbers(project_root: Path, shoot_date: str, camera_unit: str, flat_card_layout: bool = False) -> list[int]:
+    roll_root = project_root / "001_Footage" if flat_card_layout else project_root / "01_Footage" / shoot_date / camera_unit
     if not roll_root.is_dir():
         return []
     used: list[int] = []

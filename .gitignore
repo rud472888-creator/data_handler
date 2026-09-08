@@ -11,6 +11,8 @@ __pycache__/
 .codegraph/
 .codex/
 .lazyweb/
+.superloopy/
+.ux-audit/
 .superpowers/
 .pipeline/
 

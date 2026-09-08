@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_NAME="Data Handler"
-BUNDLE_ID="com.dit.data-handler"
+APP_NAME="${APP_NAME:-Data Handler}"
+BUNDLE_ID="${BUNDLE_ID:-com.dit.data-handler}"
 MIN_SYSTEM_VERSION="13.0"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
