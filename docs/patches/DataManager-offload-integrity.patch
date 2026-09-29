@@ -1,0 +1,489 @@
+From a22b97e57b74f4809886ff0593eb3b7872c10ae1 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 29 Sep 2026 05:29:59 +0000
+Subject: [PATCH] Harden offload copy verification and source protection
+
+- Verify each replica from disk: fsync (F_FULLFSYNC on macOS) the partial
+  file, then re-read it with the page cache bypassed (F_NOCACHE /
+  POSIX_FADV_DONTNEED) before comparing SHA-256 with the source.
+- Compare the checksum before publishing: a mismatching copy is deleted
+  instead of being renamed to the final clip name, so a corrupt replica
+  never sits at a real clip path and a retry is not blocked as a collision.
+- fsync the destination directory after the rename.
+- Refuse plans whose replica project folder overlaps a source folder, so
+  nothing is ever written onto the camera card.
+- Fail a file as source_changed when the source size/mtime changes between
+  scan, hashing and copy completion.
+- Record source read errors as a failed file (source_read_failed) instead
+  of raising out of the offload without persisting results.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01MzVzjKuWjGBgHja8G3rLWX
+---
+ app/runtime/checksum.py                   |  68 ++++++++-
+ app/runtime/offload.py                    |  94 +++++++++++-
+ tests/runtime/test_offload.py             | 173 +++++++++++++++++++++-
+ tests/runtime/test_recovery_resilience.py |   4 +-
+ 4 files changed, 327 insertions(+), 12 deletions(-)
+
+diff --git a/app/runtime/checksum.py b/app/runtime/checksum.py
+index 7d49694..def1038 100644
+--- a/app/runtime/checksum.py
++++ b/app/runtime/checksum.py
+@@ -3,12 +3,78 @@
+ from __future__ import annotations
+ 
+ import hashlib
++import os
++from contextlib import suppress
+ from pathlib import Path
++from typing import BinaryIO
+ 
++try:
++    import fcntl
++except ImportError:  # pragma: no cover - non-POSIX platforms
++    fcntl = None  # type: ignore[assignment]
++
++
++def sha256_file(path: Path, chunk_size: int = 1024 * 1024, *, bypass_cache: bool = False) -> str:
++    """Return the SHA-256 hex digest of ``path``.
++
++    With ``bypass_cache`` the read is asked to skip the OS page cache so a freshly
++    written replica is verified from the storage device, not from memory.
++    """
+ 
+-def sha256_file(path: Path, chunk_size: int = 1024 * 1024) -> str:
+     digest = hashlib.sha256()
+     with path.open("rb") as handle:
++        if bypass_cache:
++            _disable_read_cache(handle)
+         for chunk in iter(lambda: handle.read(chunk_size), b""):
+             digest.update(chunk)
+     return digest.hexdigest()
++
++
++def fsync_file(path: Path) -> None:
++    """Flush a written file to stable storage (F_FULLFSYNC on macOS)."""
++
++    fd = os.open(path, os.O_RDONLY)
++    try:
++        _full_fsync(fd)
++        _drop_cached_pages(fd)
++    finally:
++        os.close(fd)
++
++
++def fsync_directory(path: Path) -> None:
++    """Best-effort flush of a directory entry change such as a rename."""
++
++    with suppress(OSError):
++        fd = os.open(path, os.O_RDONLY)
++        try:
++            _full_fsync(fd)
++        finally:
++            os.close(fd)
++
++
++def _full_fsync(fd: int) -> None:
++    full_fsync = getattr(fcntl, "F_FULLFSYNC", None)
++    if full_fsync is not None:
++        try:
++            fcntl.fcntl(fd, full_fsync)
++            return
++        except OSError:
++            pass
++    os.fsync(fd)
++
++
++def _disable_read_cache(handle: BinaryIO) -> None:
++    fd = handle.fileno()
++    no_cache = getattr(fcntl, "F_NOCACHE", None)
++    if no_cache is not None:
++        with suppress(OSError):
++            fcntl.fcntl(fd, no_cache, 1)
++    _drop_cached_pages(fd)
++
++
++def _drop_cached_pages(fd: int) -> None:
++    fadvise = getattr(os, "posix_fadvise", None)
++    dont_need = getattr(os, "POSIX_FADV_DONTNEED", None)
++    if fadvise is not None and dont_need is not None:
++        with suppress(OSError):
++            fadvise(fd, 0, 0, dont_need)
+diff --git a/app/runtime/offload.py b/app/runtime/offload.py
+index 9cae622..4e40557 100644
+--- a/app/runtime/offload.py
++++ b/app/runtime/offload.py
+@@ -12,7 +12,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
+ from app.persistence.db import Database
+ from app.persistence.models import JobFile, JobFileReplica
+ from app.persistence.repositories import EventRepository, JobFileRepository, JobRepository
+-from app.runtime.checksum import sha256_file
++from app.runtime.checksum import fsync_directory, fsync_file, sha256_file
+ from app.runtime.scan import ScannedFile, scan_source
+ from app.runtime.state_machine import JobState
+ 
+@@ -21,6 +21,14 @@ class OffloadError(RuntimeError):
+     """Raised for unrecoverable replication failures."""
+ 
+ 
++class ReplicaChecksumMismatch(OSError):
++    """Raised when a freshly written replica does not match the source checksum."""
++
++    def __init__(self, checksum: str) -> None:
++        super().__init__("replica checksum mismatch")
++        self.checksum = checksum
++
++
+ @dataclass(frozen=True)
+ class SourcePath:
+     path_id: str
+@@ -141,6 +149,9 @@ class OffloadService:
+                 "at least one replica path is required",
+                 finalize_state,
+             )
++        overlap = _source_destination_overlap(source_paths, plan)
++        if overlap is not None:
++            return self._fail_job(job_id, "destination_overlaps_source", overlap, finalize_state)
+         try:
+             scanned_by_source = [(source, scan_source(source.root)) for source in source_paths]
+         except OSError as exc:
+@@ -212,7 +223,28 @@ class OffloadService:
+     ) -> JobFile:
+         if plan.footage_run_name is None:
+             raise OffloadError("footage run name was not resolved")
+-        source_checksum = sha256_file(scanned_file.path)
++        try:
++            before = _source_fingerprint(scanned_file.path)
++            source_checksum = sha256_file(scanned_file.path)
++        except OSError as exc:
++            return _job_file(
++                job_id,
++                source,
++                scanned_file,
++                status="failed",
++                error_code="source_read_failed",
++                error_message=str(exc),
++            )
++        if before[0] != scanned_file.size_bytes:
++            return _job_file(
++                job_id,
++                source,
++                scanned_file,
++                status="failed",
++                checksum_source=source_checksum,
++                error_code="source_changed",
++                error_message="source file size changed after scan",
++            )
+         replica_results: list[JobFileReplica] = []
+         for replica in plan.replica_paths:
+             project_root = replica.root / plan.project_name
+@@ -229,7 +261,15 @@ class OffloadService:
+                 )
+             )
+         failed = [result for result in replica_results if result.status != "verified"]
+-        if any(result.error_code == "target_collision" for result in failed):
++        try:
++            source_unchanged = _source_fingerprint(scanned_file.path) == before
++        except OSError:
++            source_unchanged = False
++        if not source_unchanged:
++            status = "failed"
++            error_code = "source_changed"
++            error_message = "source file changed or became unreadable during copy"
++        elif any(result.error_code == "target_collision" for result in failed):
+             status = "failed"
+             error_code = "target_collision"
+             error_message = "target collision blocks overwrite"
+@@ -299,7 +339,17 @@ class OffloadService:
+                 error_message=f"target collision blocks overwrite: {target}",
+             )
+         try:
+-            checksum = _copy_and_hash(scanned_file.path, target)
++            checksum = _copy_and_hash(scanned_file.path, target, source_checksum)
++        except ReplicaChecksumMismatch as exc:
++            return JobFileReplica(
++                file_id=file_id,
++                path_id=replica.path_id,
++                dest_relpath=dest_relpath,
++                checksum=exc.checksum,
++                status="failed",
++                error_code="replica_checksum_mismatch",
++                error_message="replica checksum mismatch",
++            )
+         except OSError as exc:
+             return JobFileReplica(
+                 file_id=file_id,
+@@ -367,14 +417,26 @@ class OffloadService:
+         return OffloadResult(job_id=job_id, state=state, files=files, reason=reason)
+ 
+ 
+-def _copy_and_hash(source: Path, target: Path) -> str:
++def _copy_and_hash(source: Path, target: Path, expected_checksum: str) -> str:
++    """Copy to a hidden partial file, verify it from disk, then publish it.
++
++    The final target name only ever holds a replica whose on-disk bytes matched
++    ``expected_checksum``; a mismatching or failed copy is removed.
++    """
++
+     target.parent.mkdir(parents=True, exist_ok=True)
+     partial = target.with_name(f".{target.name}.partial-{uuid4().hex}")
+     try:
+         shutil.copyfile(source, partial)
+-        checksum = sha256_file(partial)
++        fsync_file(partial)
++        checksum = sha256_file(partial, bypass_cache=True)
++        if checksum != expected_checksum:
++            raise ReplicaChecksumMismatch(checksum)
+         _copy_metadata_best_effort(source, partial)
++        if target.exists():
++            raise FileExistsError(f"target appeared during copy: {target}")
+         partial.replace(target)
++        fsync_directory(target.parent)
+         return checksum
+     except OSError:
+         with suppress(OSError):
+@@ -389,6 +451,26 @@ def _copy_metadata_best_effort(source: Path, target: Path) -> None:
+         pass
+ 
+ 
++def _source_fingerprint(path: Path) -> tuple[int, int]:
++    stat = path.stat()
++    return stat.st_size, stat.st_mtime_ns
++
++
++def _source_destination_overlap(
++    source_paths: tuple[SourcePath, ...],
++    plan: DestinationPlan,
++) -> str | None:
++    """Refuse plans where a replica project folder would be written inside a source."""
++
++    for source in source_paths:
++        source_root = source.root.resolve()
++        for project_root in plan.project_roots:
++            resolved = project_root.resolve()
++            if resolved.is_relative_to(source_root) or source_root.is_relative_to(resolved):
++                return f"replica project {resolved} overlaps source {source_root}"
++    return None
++
++
+ def _job_file(
+     job_id: str,
+     source: SourcePath,
+diff --git a/tests/runtime/test_offload.py b/tests/runtime/test_offload.py
+index 8358cae..2359b1a 100644
+--- a/tests/runtime/test_offload.py
++++ b/tests/runtime/test_offload.py
+@@ -286,10 +286,10 @@ def test_replica_failure_yields_warn_after_other_replica_success(tmp_path, monke
+ 
+     original = offload._copy_and_hash
+ 
+-    def flaky_replica(source_path: Path, target: Path) -> str:
++    def flaky_replica(source_path: Path, target: Path, expected_checksum: str) -> str:
+         if "path2" in target.parts:
+             raise OSError("replica device unavailable")
+-        return original(source_path, target)
++        return original(source_path, target, expected_checksum)
+ 
+     monkeypatch.setattr(offload, "_copy_and_hash", flaky_replica)
+ 
+@@ -318,7 +318,7 @@ def test_source_disappearance_yields_failed(tmp_path, monkeypatch) -> None:
+ 
+     from app.runtime import offload
+ 
+-    def missing_source(source_path: Path, target: Path) -> str:
++    def missing_source(source_path: Path, target: Path, expected_checksum: str) -> str:
+         raise FileNotFoundError(f"missing {source_path}")
+ 
+     monkeypatch.setattr(offload, "_copy_and_hash", missing_source)
+@@ -337,3 +337,170 @@ def test_source_disappearance_yields_failed(tmp_path, monkeypatch) -> None:
+ 
+     assert result.state is JobState.FAILED
+     assert result.files[0].error_code == "replica_copy_failed"
++
++
++def _single_clip_plan(tmp_path: Path, run_name: str = "R#1") -> DestinationPlan:
++    return DestinationPlan(
++        project_name="Project",
++        replica_paths=(ReplicaPath(path_id="path1", root=tmp_path / "path1"),),
++        footage_run_name=run_name,
++    )
++
++
++def test_corrupt_replica_is_never_published_and_retry_succeeds(tmp_path, monkeypatch) -> None:
++    database = Database(tmp_path / "fdm.sqlite3")
++    source = tmp_path / "source"
++    source.mkdir()
++    (source / "A001_C001.braw").write_bytes(b"clip")
++    target = tmp_path / "path1/Project/01_Footage/R#1/path1/A001_C001.braw"
++
++    from app.runtime import offload
++
++    def corrupting_copy(src: Path, dst: Path) -> None:
++        dst.write_bytes(b"clix")
++
++    monkeypatch.setattr(offload.shutil, "copyfile", corrupting_copy)
++    result = OffloadService(database).execute(
++        job_id=_make_job(database),
++        source_paths=(SourcePath(path_id="path1", root=source),),
++        plan=_single_clip_plan(tmp_path),
++    )
++
++    assert result.state is JobState.FAILED
++    assert result.files[0].replica_results[0].error_code == "replica_checksum_mismatch"
++    assert not target.exists()
++    assert list(target.parent.iterdir()) == []
++
++    monkeypatch.undo()
++    retry = OffloadService(database).execute(
++        job_id=_make_job(database),
++        source_paths=(SourcePath(path_id="path1", root=source),),
++        plan=_single_clip_plan(tmp_path),
++    )
++
++    assert retry.state is JobState.COMPLETED
++    assert target.read_bytes() == b"clip"
++
++
++def test_replica_is_verified_by_rereading_from_disk(tmp_path, monkeypatch) -> None:
++    database = Database(tmp_path / "fdm.sqlite3")
++    source = tmp_path / "source"
++    source.mkdir()
++    (source / "A001_C001.braw").write_bytes(b"clip")
++
++    from app.runtime import offload
++
++    calls: list[tuple[str, bool]] = []
++    synced: list[str] = []
++    original_hash = offload.sha256_file
++
++    def recording_hash(path: Path, *args: object, bypass_cache: bool = False) -> str:
++        calls.append((path.name, bypass_cache))
++        return original_hash(path, bypass_cache=bypass_cache)
++
++    monkeypatch.setattr(offload, "sha256_file", recording_hash)
++    monkeypatch.setattr(offload, "fsync_file", lambda path: synced.append(path.name))
++    result = OffloadService(database).execute(
++        job_id=_make_job(database),
++        source_paths=(SourcePath(path_id="path1", root=source),),
++        plan=_single_clip_plan(tmp_path),
++    )
++
++    assert result.state is JobState.COMPLETED
++    partial_reads = [bypass for name, bypass in calls if ".partial-" in name]
++    assert partial_reads == [True]
++    assert len(synced) == 1 and ".partial-" in synced[0]
++
++
++def test_replica_inside_source_is_refused_and_source_untouched(tmp_path) -> None:
++    database = Database(tmp_path / "fdm.sqlite3")
++    source = tmp_path / "card"
++    source.mkdir()
++    (source / "A001_C001.braw").write_bytes(b"clip")
++    before = sorted(p.relative_to(source) for p in source.rglob("*"))
++
++    for replica_root, project in ((source / "backup", "Project"), (tmp_path, "card")):
++        result = OffloadService(database).execute(
++            job_id=_make_job(database),
++            source_paths=(SourcePath(path_id="path1", root=source),),
++            plan=DestinationPlan(
++                project_name=project,
++                replica_paths=(ReplicaPath(path_id="path1", root=replica_root),),
++            ),
++        )
++        assert result.state is JobState.FAILED
++        assert "destination_overlaps_source" in result.reason
++
++    assert sorted(p.relative_to(source) for p in source.rglob("*")) == before
++
++
++def test_source_modified_during_copy_fails(tmp_path, monkeypatch) -> None:
++    database = Database(tmp_path / "fdm.sqlite3")
++    source = tmp_path / "source"
++    source.mkdir()
++    clip = source / "A001_C001.braw"
++    clip.write_bytes(b"clip")
++
++    from app.runtime import offload
++
++    original_copy = offload.shutil.copyfile
++
++    def copy_then_touch_source(src: Path, dst: Path) -> None:
++        original_copy(src, dst)
++        clip.write_bytes(b"clip-grown")
++
++    monkeypatch.setattr(offload.shutil, "copyfile", copy_then_touch_source)
++    result = OffloadService(database).execute(
++        job_id=_make_job(database),
++        source_paths=(SourcePath(path_id="path1", root=source),),
++        plan=_single_clip_plan(tmp_path),
++    )
++
++    assert result.state is JobState.FAILED
++    assert result.files[0].error_code == "source_changed"
++
++
++def test_source_read_error_fails_job_with_recorded_file(tmp_path, monkeypatch) -> None:
++    database = Database(tmp_path / "fdm.sqlite3")
++    job_id = _make_job(database)
++    source = tmp_path / "source"
++    source.mkdir()
++    (source / "A001_C001.braw").write_bytes(b"clip")
++
++    from app.runtime import offload
++
++    def unreadable(path: Path, *args: object, **kwargs: object) -> str:
++        raise OSError("I/O error reading card")
++
++    monkeypatch.setattr(offload, "sha256_file", unreadable)
++    result = OffloadService(database).execute(
++        job_id=job_id,
++        source_paths=(SourcePath(path_id="path1", root=source),),
++        plan=_single_clip_plan(tmp_path),
++    )
++
++    assert result.state is JobState.FAILED
++    assert result.files[0].error_code == "source_read_failed"
++    with database.session() as connection:
++        job = JobRepository(connection).get(job_id)
++    assert job is not None and job.state == "FAILED"
++
++
++def test_offload_preserves_source_bytes_and_timestamps(tmp_path) -> None:
++    database = Database(tmp_path / "fdm.sqlite3")
++    source = tmp_path / "source"
++    _write_source(source)
++    snapshot = {
++        p: (p.read_bytes(), p.stat().st_mtime_ns) for p in source.rglob("*") if p.is_file()
++    }
++
++    result = OffloadService(database).execute(
++        job_id=_make_job(database),
++        source_paths=(SourcePath(path_id="path1", root=source),),
++        plan=_single_clip_plan(tmp_path),
++    )
++
++    assert result.state is JobState.COMPLETED
++    assert {
++        p: (p.read_bytes(), p.stat().st_mtime_ns) for p in source.rglob("*") if p.is_file()
++    } == snapshot
+diff --git a/tests/runtime/test_recovery_resilience.py b/tests/runtime/test_recovery_resilience.py
+index e96b45e..d662ffe 100644
+--- a/tests/runtime/test_recovery_resilience.py
++++ b/tests/runtime/test_recovery_resilience.py
+@@ -75,10 +75,10 @@ def test_replica_failure_path_remains_warn(tmp_path) -> None:
+ 
+     original = offload._copy_and_hash
+ 
+-    def fail_replica(source_path, target):
++    def fail_replica(source_path, target, expected_checksum):
+         if "path2" in target.parts:
+             raise OSError("replica disconnected")
+-        return original(source_path, target)
++        return original(source_path, target, expected_checksum)
+ 
+     offload._copy_and_hash = fail_replica
+     try:
+-- 
+2.43.0
+
