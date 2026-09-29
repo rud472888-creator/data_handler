@@ -63,3 +63,48 @@ def test_second_card_keeps_first_card_reports(tmp_path, monkeypatch):
     first_pdfs = sorted(a['path'] for a in cards[first]['artifacts'] if a['path'].endswith('.pdf'))
     second_pdfs = sorted(a['path'] for a in cards[second]['artifacts'] if a['path'].endswith('.pdf'))
     assert len(first_pdfs) == 3 and not set(first_pdfs) & set(second_pdfs)
+
+    # The shooting-day DIT report summarizes both cards and travels with every backup.
+    created = app.post(f'/api/library/projects/{project["id"]}/dit-report', json={'shoot_date': '2026-09-14'})
+    assert created.status_code == 200, created.text
+    body = created.json()
+    assert body['summary']['cards'] == 2 and body['summary']['verified'] == 2
+    assert sorted(body['saved_to']) == [str(root / 'Night/00_Master/reports/DIT_Report_2026-09-14.pdf') for root in backups]
+    pdf = app.get(body['url'])
+    assert pdf.status_code == 200 and pdf.content.startswith(b'%PDF')
+    assert app.post(f'/api/library/projects/{project["id"]}/dit-report', json={'shoot_date': '2026-09-15'}).status_code == 404
+    assert app.post(f'/api/library/projects/{project["id"]}/dit-report', json={'shoot_date': '../x'}).status_code == 400
+
+
+def test_collector_skips_settled_runs_and_list_omits_findings(tmp_path):
+    from orchestrator.agent.reviews import ReviewCollector
+    from orchestrator.jsonio import write_json
+
+    runs = tmp_path / 'runs'
+    folder = runs / 'run-a'
+    write_json(folder / 'request.json', {'project_name': 'P', 'replica_roots': [str(tmp_path / 'gone')]})
+    write_json(folder / 'events/datamanager.done.json', {'status': 'completed', 'replicas_complete': True})
+    collector = ReviewCollector(tmp_path, runs, inference=lambda *a: 'x')
+    calls = []
+    original = collector.review
+    collector.review = lambda *args: calls.append(args[2]) or original(*args)
+    collector.collect_once()
+    assert sorted(calls) == ['copy', 'shooting']
+    collector.collect_once()
+    assert len(calls) == 2  # unchanged inputs are not reviewed again
+    write_json(folder / 'events/datamanager.done.json', {'status': 'completed', 'replicas_complete': True, 'x': 1})
+    collector.collect_once()
+    assert len(calls) == 4
+
+    app = client(tmp_path)
+    project = app.post('/api/library/projects', json={'name': 'P'}).json()['project']
+    registry = read_json(tmp_path / 'registry.json')
+    registry['runs'].append({'project_id': project['id'], 'run_id': 'run-a', 'roll': 'R#1',
+                             'shoot_date': '2026-09-14', 'camera_unit': 'A', 'source_path': '/x'})
+    write_json(tmp_path / 'registry.json', registry)
+    card = app.get(f'/api/library/projects/{project["id"]}/cards').json()['cards'][0]
+    copy = next(r for r in card['agent_reviews'] if r['phase'] == 'copy')
+    assert copy['finding_count'] > 0 and copy['findings'] == []
+    detail = app.get('/api/library/cards/run-a/reviews').json()['agent_reviews']
+    assert len(next(r for r in detail if r['phase'] == 'copy')['findings']) == copy['finding_count']
+    assert app.get('/api/library/cards/run-missing/reviews').status_code == 404

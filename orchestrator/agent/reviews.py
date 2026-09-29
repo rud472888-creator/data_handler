@@ -31,7 +31,25 @@ def fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
+_MESSAGES = {}
+_MESSAGES_LIMIT = 2048
+
+
 def review_messages(folder):
+    """Saved review messages for a run, re-read only when their inputs change."""
+    folder = Path(folder)
+    signature = ReviewCollector._inputs(folder)
+    cached = _MESSAGES.get(folder)
+    if cached and cached[0] == signature:
+        return cached[1]
+    messages = _read_review_messages(folder)
+    if len(_MESSAGES) >= _MESSAGES_LIMIT:
+        _MESSAGES.clear()
+    _MESSAGES[folder] = (signature, messages)
+    return messages
+
+
+def _read_review_messages(folder):
     messages = []
     for phase in PHASES:
         saved = read_object(folder / 'agent/reviews' / f'{phase}.json')
@@ -76,22 +94,51 @@ class ReviewCollector:
         self.runs_root = Path(runs_root) if runs_root is not None else self.root / 'runs'
         self.registry = registry or ConsoleRegistry(self.root / 'console-registry.json')
         self.inference = inference
+        # Folders whose review inputs were unchanged at the last settled pass.
+        self._settled = {}
+        self._deferred = False
+
+    @staticmethod
+    def _inputs(folder):
+        """Cheap stat signature of everything a review revision is derived from."""
+        names = ['request.json', *(f'events/{e}.done.json' for e in sorted(set(PHASES.values()))),
+                 *(f'agent/reviews/{phase}.retry.json' for phase in PHASES),
+                 *(f'agent/reviews/{phase}.json' for phase in PHASES)]
+        signature = []
+        for name in names:
+            try:
+                stat = (folder / name).stat()
+                signature.append((name, stat.st_size, stat.st_mtime_ns))
+            except OSError:
+                signature.append((name, None, None))
+        return tuple(signature)
 
     def collect_once(self, stopped=None):
         records = {r['run_id']: r for r in self.registry.load().get('runs', [])}
         # CLI-only jobs still get copy/report reviews. Shooting needs a project.
         folders = sorted({p.parent.parent for p in self.runs_root.glob('*/events/*.done.json')})
         for folder in folders:
+            before = self._inputs(folder)
+            if self._settled.get(folder) == before:
+                continue
             record = records.get(folder.name, {'run_id': folder.name})
+            settled = True
             for phase, engine in PHASES.items():
                 if stopped is not None and stopped.is_set():
                     return
                 event = folder / f'events/{engine}.done.json'
                 if event.is_file():
+                    self._deferred = False
                     try:
                         self.review(folder, record, phase)
+                        settled = settled and not self._deferred
                     except Exception:
+                        settled = False
                         log.exception('Completion review deferred for %s / %s', folder.name, phase)
+            if settled:
+                self._settled[folder] = self._inputs(folder)
+            else:
+                self._settled.pop(folder, None)
 
     def review(self, folder, record, phase):
         directory = folder / 'agent/reviews'
@@ -100,6 +147,7 @@ class ReviewCollector:
             try:
                 fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
+                self._deferred = True  # Another collector is reviewing; look again next pass.
                 return
             event_path = folder / f'events/{PHASES[phase]}.done.json'
             event = read_object(event_path)

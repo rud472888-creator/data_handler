@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import re
+import shutil
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -25,6 +27,18 @@ STATIC = Path(__file__).parent / "static"
 
 class ProjectPayload(BaseModel):
     name: str
+
+
+class DayReportPayload(BaseModel):
+    shoot_date: str
+
+
+_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _roll_number(roll: Any) -> int:
+    match = re.fullmatch(r"R#(\d+)", str(roll or ""))
+    return int(match.group(1)) if match else 1 << 30
 
 
 def card_snapshot(record: dict[str, Any], runs_root: Path) -> dict[str, Any]:
@@ -78,10 +92,17 @@ def card_snapshot(record: dict[str, Any], runs_root: Path) -> dict[str, Any]:
             if request.get("project_name") and request.get("footage_run_name")
         ],
         "artifacts": artifacts,
-        "agent_reviews": [{**{k: v for k, v in r.items() if k not in {'files', 'clips', 'findings'}},
-                           'findings': r.get('findings', [])[:100],
-                           'finding_count': len(r.get('findings', []))} for r in reviews],
+        "replica_roots": [str(root) for root in request.get("replica_roots", [])],
+        # The list carries review summaries only; the selected card loads its
+        # findings from /api/library/cards/{run_id}/reviews.
+        "agent_reviews": [review_summary(r) for r in reviews],
     }
+
+
+def review_summary(review: dict[str, Any], findings: int = 0) -> dict[str, Any]:
+    return {**{k: v for k, v in review.items() if k not in {'files', 'clips', 'findings'}},
+            'findings': review.get('findings', [])[:findings],
+            'finding_count': len(review.get('findings', []))}
 
 
 def create_app(**engine_options: Any) -> FastAPI:
@@ -172,11 +193,24 @@ def create_app(**engine_options: Any) -> FastAPI:
         return {"project": project.to_payload()}
 
     @app.get("/api/library/projects/{project_id}/cards")
-    def cards(project_id: str) -> dict[str, Any]:
+    def cards(project_id: str) -> JSONResponse:
         data = registry.load()
         if not any(p["id"] == project_id for p in data["projects"]):
             raise HTTPException(404, "프로젝트를 찾을 수 없습니다.")
-        return {"cards": [card_snapshot(r, runs_root) for r in data["runs"] if r.get("project_id") == project_id]}
+        # Polled every few seconds: the payload is plain JSON already, so skip
+        # FastAPI's recursive encoder.
+        return JSONResponse({"cards": [card_snapshot(r, runs_root) for r in data["runs"] if r.get("project_id") == project_id]})
+
+    @app.get("/api/library/cards/{run_id}/reviews")
+    def card_reviews(run_id: str) -> dict[str, Any]:
+        from orchestrator.agent.reviews import review_messages
+
+        if Path(run_id).name != run_id or run_id in {".", ".."}:
+            raise HTTPException(404, "작업 기록이 없습니다.")
+        if not any(r.get("run_id") == run_id for r in registry.load()["runs"]):
+            raise HTTPException(404, "작업 기록이 없습니다.")
+        return {"run_id": run_id,
+                "agent_reviews": [review_summary(r, 100) for r in review_messages(Path(runs_root) / run_id)]}
 
     @app.get("/api/library/reports/{run_id}/{index}")
     def report_file(run_id: str, index: int) -> FileResponse:
@@ -190,6 +224,55 @@ def create_app(**engine_options: Any) -> FastAPI:
         if not artifact["available"] or Path(artifact["path"]).suffix.lower() != ".pdf":
             raise HTTPException(404, "PDF 파일을 사용할 수 없습니다.")
         return FileResponse(artifact["path"], filename=Path(artifact["path"]).name, media_type="application/pdf", content_disposition_type="inline")
+
+    report_root = Path(registry_path).parent / "dit-reports"
+
+    def day_report_path(project_id: str, shoot_date: str) -> Path:
+        if not _DATE.fullmatch(shoot_date) or Path(project_id).name != project_id:
+            raise HTTPException(400, "촬영일 형식이 올바르지 않습니다.")
+        return report_root / project_id / f"DIT_Report_{shoot_date}.pdf"
+
+    @app.post("/api/library/projects/{project_id}/dit-report")
+    def create_day_report(project_id: str, payload: DayReportPayload) -> dict[str, Any]:
+        from orchestrator.dit_report import card_rows, summary, write_day_report
+
+        path = day_report_path(project_id, payload.shoot_date)
+        data = registry.load()
+        project = next((p for p in data["projects"] if p["id"] == project_id), None)
+        if project is None:
+            raise HTTPException(404, "프로젝트를 찾을 수 없습니다.")
+        cards = [card_snapshot(r, runs_root) for r in data["runs"]
+                 if r.get("project_id") == project_id and r.get("shoot_date") == payload.shoot_date]
+        if not cards:
+            raise HTTPException(404, "이 촬영일에 가져온 카드가 없습니다.")
+        cards.sort(key=lambda c: _roll_number(c.get("roll")))
+        rows = card_rows(cards, Path(runs_root))
+        try:
+            write_day_report(path, project=project["name"], shoot_date=payload.shoot_date, rows=rows)
+        except ImportError as exc:
+            raise HTTPException(503, "PDF 생성 모듈(reportlab)을 사용할 수 없습니다.") from exc
+        # Hand the day report over with the footage: a copy beside every backup.
+        saved, offline = [], []
+        roots = dict.fromkeys(str(Path(root) / project["name"]) for c in cards for root in c.get("replica_roots", []))
+        for root in roots:
+            target = Path(root) / "00_Master" / "reports" / path.name
+            try:
+                if not Path(root).is_dir():
+                    raise OSError(root)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, target)
+                saved.append(str(target))
+            except OSError:
+                offline.append(str(target))
+        return {"url": f"/api/library/projects/{project_id}/dit-report/{payload.shoot_date}",
+                "summary": summary(rows), "saved_to": saved, "unavailable": offline}
+
+    @app.get("/api/library/projects/{project_id}/dit-report/{shoot_date}")
+    def day_report(project_id: str, shoot_date: str) -> FileResponse:
+        path = day_report_path(project_id, shoot_date)
+        if not path.is_file():
+            raise HTTPException(404, "DIT 리포트를 먼저 생성하세요.")
+        return FileResponse(path, filename=path.name, media_type="application/pdf", content_disposition_type="inline")
 
     app.mount("/", create_engine_app(**engine_options, flat_card_layout=True))
     return app
