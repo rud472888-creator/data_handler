@@ -22,6 +22,14 @@ def spawn_python_module(run_id: str, module: str, *args: str) -> int:
             stderr=stderr,
             start_new_session=True,
         )
+    if sys.platform == 'darwin' and os.path.isfile('/usr/bin/caffeinate'):
+        # Tie the sleep assertion to the worker, not the UI or messenger process.
+        try:
+            subprocess.Popen(['/usr/bin/caffeinate', '-i', '-w', str(process.pid)],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            pass
     return int(process.pid)
 
 

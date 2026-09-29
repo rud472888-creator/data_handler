@@ -6,21 +6,51 @@ const project = () => state.projects.find(p => p.id === state.project);
 const tone = phase => ['reported','verified'].includes(phase) ? 'good' : phase === 'failed' ? 'failed' : phase === 'review' ? 'warning' : 'active';
 const badge = card => `<span class="status ${tone(card.phase)}">${escape(labels[card.phase] || '상태 확인 필요')}</span>`;
 const dateTime = value => value ? new Date(value).toLocaleString('ko-KR') : '기록 없음';
+let renderedProject = undefined;
 const pickerFields = new Map();
 window.DataHandlerPathChooser = {resolve(result) {
   const field = pickerFields.get(result.requestId);
-  if (field && result.path) field.value = result.path;
+  if (field?.isConnected && !field.disabled && result.path) field.value = result.path;
   pickerFields.delete(result.requestId);
 }};
-if (window.webkit?.messageHandlers?.pathChooser) {
-  for (const name of ['source_path','replica1','replica2']) {
-    const field = $('importForm').elements[name];
+function attachPathChooser(field, container = field.parentElement) {
+  if (window.webkit?.messageHandlers?.pathChooser) {
     const button = document.createElement('button');
     button.type = 'button'; button.textContent = '폴더 선택';
     button.onclick = () => { const requestId = crypto.randomUUID(); pickerFields.set(requestId,field); window.webkit.messageHandlers.pathChooser.postMessage({requestId,currentPath:field.value}); };
-    field.parentElement.append(button);
+    container.append(button);
   }
 }
+attachPathChooser($('importForm').elements.source_path);
+let replicaSequence = 0;
+function updateReplicaRows() {
+  const rows = [...$('replicaPaths').children];
+  rows.forEach((row, index) => {
+    row.querySelector('label').textContent = `백업 경로 ${index + 1}`;
+    const remove = row.querySelector('[data-remove-replica]');
+    remove.disabled = rows.length === 1;
+    remove.setAttribute('aria-label', `백업 경로 ${index + 1} 삭제`);
+  });
+  $('replicaCount').textContent = `${rows.length}개 경로`;
+}
+function addReplicaRow(value = '', focus = false) {
+  const row = document.createElement('div');
+  row.className = 'replica-row';
+  const id = `replica-path-${++replicaSequence}`;
+  row.innerHTML = `<div class="replica-row-header"><label for="${id}"></label><button type="button" data-remove-replica>삭제</button></div><div class="replica-row-controls"><input id="${id}" name="replica_roots" required placeholder="/Volumes/BACKUP" list="destinationChoices" autocomplete="off"></div>`;
+  const field = row.querySelector('input');
+  field.value = value;
+  attachPathChooser(field, row.querySelector('.replica-row-controls'));
+  row.querySelector('[data-remove-replica]').onclick = () => {
+    if ($('replicaPaths').children.length === 1) return;
+    const next = row.nextElementSibling || row.previousElementSibling;
+    for (const [requestId, target] of pickerFields) if (target === field) pickerFields.delete(requestId);
+    row.remove(); updateReplicaRows(); next.querySelector('input').focus();
+  };
+  $('replicaPaths').append(row); updateReplicaRows();
+  if (focus) field.focus();
+}
+$('addReplica').onclick = () => addReplicaRow('', true);
 
 async function api(path, data) {
   const response = await fetch(path, data === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)});
@@ -51,21 +81,20 @@ function render() {
   const cards = visibleCards();
   if (state.loading) $('content').innerHTML = empty('기록을 불러오는 중', '프로젝트의 카드와 완료 기록을 확인하고 있습니다.');
   else if (!project()) $('content').innerHTML = empty('촬영 프로젝트부터 시작하세요', '카드, 복사본과 리포트를 하나의 프로젝트에 모읍니다. 디스크는 카드를 가져올 때 연결하면 됩니다.', '<button class="primary" data-new-project>새 프로젝트</button>');
-  else if (!state.cards.length) $('content').innerHTML = empty('첫 번째 카드를 가져오세요', '원본 카드와 두 복제 위치를 선택하세요. 복사·검증 결과와 PDF가 이곳에 기록됩니다.', '<button class="primary" data-import>카드 가져오기</button>');
+  else if (!state.cards.length) $('content').innerHTML = empty('첫 번째 카드를 가져오세요', '원본 카드와 백업 경로를 선택하세요. 경로는 1개부터 필요한 만큼 추가할 수 있습니다. 복사·검증 결과와 PDF가 이곳에 기록됩니다.', '<button class="primary" data-import>카드 가져오기</button>');
   else if (!cards.length) $('content').innerHTML = empty('일치하는 카드가 없습니다', '검색어나 촬영일 선택을 변경하세요.');
   else if (state.tab === 'reports') {
     const rows = cards.flatMap(c => pdfs(c).map(a => `<div class="report-row"><div><strong>${escape(c.roll)}</strong><small>${escape(c.shoot_date)} / 카메라 ${escape(c.camera_unit)}</small></div>${artifactLink(a)}</div>`));
-    $('content').innerHTML = rows.join('') || empty('PDF가 아직 없습니다', '완료 기록에 리포트가 등록되면 이곳에서 열 수 있습니다. 생성 중이거나 실패한 작업은 카드 상세에서 확인하세요.');
-  } else $('content').innerHTML = `<table><thead><tr><th>카드 / 촬영일</th><th>카메라</th><th>작업 상태</th><th>체크섬</th></tr></thead><tbody>${cards.map(c => `<tr class="${c.run_id === state.selected ? 'selected' : ''}"><td data-label="카드"><button data-card="${escape(c.run_id)}" aria-label="${escape(c.roll)} 카드 상세">${escape(c.roll)}</button><small>${escape(c.shoot_date)}</small></td><td data-label="카메라">${escape(c.camera_unit)}</td><td data-label="작업 상태">${badge(c)}</td><td data-label="체크섬"><span class="${c.verified ? 'good' : 'muted'}">${c.verified ? '검증 완료' : '미확인'}</span></td></tr>`).join('')}</tbody></table>`;
+    $('content').innerHTML = rows.join('') || empty('PDF가 아직 없습니다', '완료 기록에 리포트가 등록되면 이곳에서 열 수 있습니다. 작업 상태와 에이전트 검토에서 결과를 확인하세요.');
+  } else $('content').innerHTML = `<table><thead><tr><th>카드 / 촬영일</th><th>카메라</th><th>작업 상태</th><th>체크섬</th></tr></thead><tbody>${cards.map(c => `<tr class="${c.run_id === state.selected ? 'selected' : ''}"><td data-label="카드"><button data-card="${escape(c.run_id)}" aria-label="${escape(c.roll)} 카드 선택">${escape(c.roll)}</button><small>${escape(c.shoot_date)}</small></td><td data-label="카메라">${escape(c.camera_unit)}</td><td data-label="작업 상태">${badge(c)}</td><td data-label="체크섬"><span class="${c.verified ? 'good' : 'muted'}">${c.verified ? '검증 완료' : '미확인'}</span></td></tr>`).join('')}</tbody></table>`;
   $('librarySummary').textContent = `${cards.length}개 카드 / ${cards.filter(c => c.verified).length}개 검증 완료`;
-  renderInspector();
+  document.dispatchEvent(new CustomEvent('dit-card-selected', {detail:{card:state.cards.find(c => c.run_id === state.selected)}}));
   const active = state.cards.filter(c => ['waiting','copying','reporting','review','failed'].includes(c.phase));
   $('queue').innerHTML = active.length ? active.map(c => `<div class="queue-row"><button data-card="${escape(c.run_id)}">${escape(c.roll)}</button>${badge(c)}<span class="muted">마지막 작업 기록 ${escape(dateTime(c.updated_at))}</span></div>`).join('') : '<p>진행 중이거나 확인이 필요한 작업이 없습니다.</p>';
-}
-function renderInspector() {
-  const c = state.cards.find(c => c.run_id === state.selected);
-  if (!c) { $('inspector').innerHTML = '<h2>카드 상세</h2><p class="muted">카드를 선택하면 원본, 복제 위치와 리포트를 확인할 수 있습니다.</p>'; return; }
-  $('inspector').innerHTML = `<h2>${escape(c.roll)}</h2><p>${badge(c)}</p><p class="muted">${escape(c.shoot_date)} / 카메라 ${escape(c.camera_unit)}</p><section><h3>원본</h3><p class="path">${escape(c.source_path)}</p><p class="muted">${c.file_count == null ? '파일 수 확인 대기' : `${escape(c.file_count)}개 파일`}</p></section><section><h3>복제본과 체크섬</h3>${c.destinations.map((d,i) => `<div class="destination"><p>복제본 ${i+1} <span class="${c.verified ? 'good' : 'muted'}">${c.verified ? '검증 완료' : '검증 결과 대기'}</span></p><p class="path">${escape(d)}</p></div>`).join('') || '<p class="muted">복제 경로 기록 대기</p>'}</section><section><h3>PDF 리포트</h3>${pdfs(c).map(a => `<p>${artifactLink(a)}</p>`).join('') || '<p class="muted">생성된 PDF 없음</p>'}</section>${c.error ? `<section><h3>확인할 내용</h3><p class="failed">${escape(c.error)}</p></section>` : ''}${c.failed_files.length ? `<section><h3>실패 파일</h3>${c.failed_files.map(f => `<p class="path">${escape(f)}</p>`).join('')}</section>` : ''}<section><h3>마지막 작업 기록</h3><p>${escape(dateTime(c.updated_at))}</p><p class="muted">이 시각 이후의 진행률은 확인되지 않았습니다. 검증 결과는 완료 기록을 기준으로 표시합니다.</p><p class="path">${escape(c.run_id)}</p></section>`;
+  if (renderedProject !== state.project) {
+    renderedProject = state.project;
+    document.dispatchEvent(new CustomEvent('dit-project-changed', {detail:{projectId:state.project}}));
+  }
 }
 let revision = 0;
 async function refresh() {
@@ -96,6 +125,10 @@ function openProject() { $('projectForm').reset(); error('projectError',''); $('
 async function openImport() {
   if (!project()) return;
   $('importForm').reset();
+  pickerFields.clear();
+  $('replicaPaths').replaceChildren();
+  const roots = project().replica_roots || [];
+  (roots.length ? roots : ['']).forEach(value => addReplicaRow(value));
   const now = new Date();
   $('importForm').elements.shoot_date.value = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
   $('importProject').textContent = `프로젝트: ${project().name}`;
@@ -139,21 +172,30 @@ $('projectForm').onsubmit = async e => {
   catch (err) { error('projectError',err.message); } finally { button.disabled = false; }
 };
 $('importForm').onsubmit = async e => {
-  e.preventDefault(); const button = $('importSubmit'); button.disabled = true; error('importError','');
+  e.preventDefault(); const button = $('importSubmit'); button.disabled = true; $('importBack').disabled = true; error('importError','');
   try {
     if (!state.review) {
-      const fields = Object.fromEntries(new FormData(e.target));
-      const payload = {project_id:state.project, shoot_date:fields.shoot_date, camera_unit:fields.camera_unit, source_path:fields.source_path.trim(), replica_roots:[fields.replica1.trim(),fields.replica2.trim()], run_mode:'workflow'};
-      if (payload.replica_roots[0] === payload.replica_roots[1]) throw new Error('서로 다른 복제 위치를 선택하세요.');
+      const form = new FormData(e.target);
+      const fields = Object.fromEntries(form);
+      const roots = form.getAll('replica_roots').map(value => value.trim());
+      if (!roots.length || roots.some(value => !value)) throw new Error('백업 경로를 입력하세요. 사용하지 않는 경로는 삭제할 수 있습니다.');
+      if (new Set(roots).size !== roots.length) throw new Error('서로 다른 백업 경로를 선택하세요.');
+      const payload = {project_id:state.project, shoot_date:fields.shoot_date, camera_unit:fields.camera_unit, source_path:fields.source_path.trim(), replica_roots:roots, run_mode:'workflow'};
+      if (roots.includes(payload.source_path)) throw new Error('원본과 백업 경로는 서로 달라야 합니다.');
+      $('importFields').querySelectorAll('input, button').forEach(control => { control.disabled = true; });
       const preview = await api('/api/roll-preview', payload);
       state.review = payload;
-      $('importReview').innerHTML = `<h3>${escape(project().name)} / ${escape(preview.roll)}</h3><p>원본</p><p class="path">${escape(payload.source_path)}</p><h3>복제될 최종 경로</h3>${preview.replica_destinations.map(d => `<p class="path">${escape(d)}</p>`).join('')}<p class="muted">이 프로젝트와 원본·복제 위치를 확인한 뒤 시작하세요.</p>`;
+      $('importReview').innerHTML = `<h3>${escape(project().name)} / ${escape(preview.roll)}</h3><p>원본</p><p class="path">${escape(payload.source_path)}</p><h3>백업될 최종 경로 · ${preview.replica_destinations.length}개</h3>${preview.replica_destinations.map((d, i) => `<p class="path">${i + 1}. ${escape(d)}</p>`).join('')}<p class="muted">이 프로젝트와 원본·백업 경로를 확인한 뒤 시작하세요.</p>`;
       $('importFields').hidden = true; $('importReview').hidden = false; $('importBack').hidden = false; button.textContent = '확인한 경로로 복사 시작';
     } else {
       const result = await api('/api/runs',state.review);
       state.selected = result.run_id; state.day = ''; state.search = ''; $('search').value = ''; state.tab = 'library'; $('importDialog').close(); back(); await refresh();
     }
-  } catch (err) { error('importError', err.message); } finally { button.disabled = false; }
+  } catch (err) { error('importError', err.message); } finally {
+    button.disabled = false; $('importBack').disabled = false;
+    $('importFields').querySelectorAll('input, button').forEach(control => { control.disabled = false; });
+    updateReplicaRows();
+  }
 };
 refresh(); volumes();
 setInterval(() => { if (!document.hidden && !$('importDialog').open && !$('projectDialog').open && !$('removeDialog').open) refresh(); }, 10000);

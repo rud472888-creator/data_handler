@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -10,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from orchestrator import paths
+from orchestrator.completion import workflow_succeeded
 from orchestrator.app_front.server import create_app as create_engine_app
 from orchestrator.jsonio import read_json
 from orchestrator.run_state import utc_now
@@ -45,7 +47,7 @@ def card_snapshot(record: dict[str, Any], runs_root: Path) -> dict[str, Any]:
     if copy.get("status") == "failed" or report.get("status") == "failed" or status == "failed":
         phase = "failed"
     elif report:
-        phase = "reported" if verified and report.get("status") in {"completed", "done"} else "review"
+        phase = "reported" if workflow_succeeded(copy, report, request, read('agent/launch-error.json')) else "review"
     elif verified:
         phase = "reporting" if request.get("run_mode", "workflow") == "workflow" else "verified"
     elif copy:
@@ -55,6 +57,10 @@ def card_snapshot(record: dict[str, Any], runs_root: Path) -> dict[str, Any]:
     else:
         phase = "waiting"
     artifacts = _artifact_payloads(run_id, folder)
+    from orchestrator.agent.reviews import review_messages
+    reviews = review_messages(folder)
+    if phase != 'failed' and any(r.get('status') == 'review_needed' for r in reviews):
+        phase = 'review'
     for index, artifact in enumerate(artifacts):
         if artifact["available"] and Path(artifact["path"]).suffix.lower() == ".pdf":
             artifact["url"] = f"/api/library/reports/{run_id}/{index}"
@@ -72,6 +78,9 @@ def card_snapshot(record: dict[str, Any], runs_root: Path) -> dict[str, Any]:
             if request.get("project_name") and request.get("footage_run_name")
         ],
         "artifacts": artifacts,
+        "agent_reviews": [{**{k: v for k, v in r.items() if k not in {'files', 'clips', 'findings'}},
+                           'findings': r.get('findings', [])[:100],
+                           'finding_count': len(r.get('findings', []))} for r in reviews],
     }
 
 
@@ -79,7 +88,18 @@ def create_app(**engine_options: Any) -> FastAPI:
     registry_path = engine_options.get("registry_path") or paths.PIPELINE_ROOT / "console-registry.json"
     runs_root = engine_options.get("runs_root") or paths.RUNS_ROOT
     registry = ConsoleRegistry(registry_path)
-    app = FastAPI(title="Data Handler DIT")
+    @asynccontextmanager
+    async def lifespan(app):
+        from orchestrator.agent.reviews import start_collector
+        stopped, worker = start_collector(Path(registry_path).parent, runs_root, registry)
+        yield
+        stopped.set()
+
+    app = FastAPI(title="Data Handler DIT", lifespan=lifespan)
+    from orchestrator.dit_app.agent_bridge import create_router
+    app.include_router(create_router(Path(registry_path).parent, Path(runs_root), registry))
+    from orchestrator.dit_app.blackmagician_bridge import create_router as blackmagician_router
+    app.include_router(blackmagician_router(Path(registry_path).parent, Path(runs_root), registry))
     app.mount("/workspace-static", StaticFiles(directory=STATIC), name="workspace-static")
 
     @app.get("/")

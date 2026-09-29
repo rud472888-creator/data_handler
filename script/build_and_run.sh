@@ -2,8 +2,8 @@
 set -euo pipefail
 
 MODE="${1:-run}"
-APP_NAME="Data Handler"
-BUNDLE_ID="com.dit.data-handler"
+APP_NAME="Data Handler DIT"
+BUNDLE_ID="com.dit.data-handler.workspace"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_BUNDLE="$ROOT_DIR/dist/$APP_NAME.app"

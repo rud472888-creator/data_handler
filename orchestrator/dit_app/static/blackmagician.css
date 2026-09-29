@@ -1,0 +1,99 @@
+#blackmagicianDialog {width:min(640px,calc(100% - 32px))}
+.blackmagician-panel {display:grid;gap:var(--space-4)}
+.blackmagician-panel>header {display:flex;align-items:flex-start;justify-content:space-between;gap:var(--space-4);margin:0}
+.blackmagician-panel>header h2 {font-size:var(--text-heading)}
+.blackmagician-panel>header p {margin-top:var(--space-1)}
+.blackmagician-connect {display:grid;gap:var(--space-3)}
+.blackmagician-field-row {display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4)}
+.blackmagician-connect label {display:grid;gap:var(--space-2);margin:0;color:var(--muted);font-size:var(--text-small)}
+.blackmagician-connect input,.blackmagician-connect select {min-height:var(--chat-control);border:var(--chat-stroke) solid var(--border);border-radius:var(--radius-control);background:var(--bg);color:var(--text);padding:var(--space-2) var(--space-3);font:inherit}
+.blackmagician-connect input:focus-visible,.blackmagician-connect select:focus-visible {outline:var(--chat-focus) solid var(--accent);outline-offset:var(--chat-focus)}
+.blackmagician-actions {display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap}
+.blackmagician-actions button[aria-busy=true] {cursor:progress}
+.blackmagician-content {display:grid;gap:var(--space-4)}
+.blackmagician-empty {border:var(--chat-stroke) solid var(--border);border-radius:var(--radius-panel);background:var(--surface);padding:var(--space-5)}
+.blackmagician-grid {display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4)}
+.blackmagician-section {border:var(--chat-stroke) solid var(--border);border-radius:var(--radius-panel);background:var(--surface);padding:var(--space-4);min-width:0}
+.blackmagician-section h3 {font-size:var(--text-body);margin:0 0 var(--space-3);font-weight:600}
+.blackmagician-section p {margin-top:var(--space-2);overflow-wrap:anywhere}
+.blackmagician-section dl {margin:0}
+.blackmagician-section dl>div {display:grid;grid-template-columns:minmax(0,1fr) minmax(0,2fr);gap:var(--space-3);padding:var(--space-2) 0;border-top:var(--chat-stroke) solid var(--border)}
+.blackmagician-section dl>div:first-child {border-top:0;padding-top:0}
+.blackmagician-section dt {color:var(--muted)}
+.blackmagician-section dd {margin:0;min-width:0;overflow-wrap:anywhere}
+.blackmagician-status {display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap}
+.blackmagician-pill {display:inline-flex;align-items:center;min-height:var(--chat-control);border:var(--chat-stroke) solid var(--border);border-radius:var(--radius-control);padding:var(--space-2) var(--space-3);background:var(--raised)}
+.blackmagician-list {display:grid;gap:0;border-top:var(--chat-stroke) solid var(--border)}
+.blackmagician-entry,.blackmagician-clip {padding:var(--space-3) 0;border-bottom:var(--chat-stroke) solid var(--border)}
+.blackmagician-entry strong,.blackmagician-clip strong {display:block;font-weight:600;overflow-wrap:anywhere}
+.blackmagician-entry small,.blackmagician-clip small {display:block;color:var(--muted);font-size:var(--text-small);margin-top:var(--space-1);overflow-wrap:anywhere}
+.blackmagician-matches {border:var(--chat-stroke) solid var(--border);border-radius:var(--radius-panel);background:var(--raised);padding:var(--space-3);display:grid;gap:var(--space-2)}
+.blackmagician-matches button {text-align:left}
+.blackmagician-counts {display:flex;gap:var(--space-2);flex-wrap:wrap;margin-top:var(--space-2)}
+.blackmagician-counts span {font-variant-numeric:tabular-nums}
+.blackmagician-list .good {color:var(--good)}
+.blackmagician-list .warning {color:var(--warning)}
+.blackmagician-list .failed {color:var(--danger)}
+@media(max-width:700px) {
+  #blackmagicianDialog {width:calc(100% - 32px)}
+  .blackmagician-field-row,.blackmagician-grid {grid-template-columns:1fr}
+  .blackmagician-connect input,.blackmagician-connect select,.blackmagician-actions button {min-height:var(--chat-touch)}
+  .blackmagician-section dl>div {grid-template-columns:1fr;gap:var(--space-1)}
+}
+
+:root {--shooting-details:400px;--shooting-compact-height:40dvh}
+body[data-mode=blackmagician] main>.toolbar,body[data-mode=blackmagician] main>.library-toolbar,
+body[data-mode=blackmagician] main>.workspace,body[data-mode=blackmagician] main>.queue,
+body[data-mode=blackmagician] main>#removedNotice,body[data-mode=blackmagician] main>#error {display:none}
+body[data-mode=blackmagician] {height:100dvh;overflow:hidden}
+body[data-mode=blackmagician] main {min-height:0;overflow:hidden}
+.shooting-panel {display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden}
+.shooting-header {display:flex;justify-content:space-between;gap:var(--space-4);padding:var(--space-5) var(--space-6);border-bottom:var(--chat-stroke) solid var(--border);flex-wrap:wrap}
+.shooting-header p {margin-top:var(--space-1);overflow-wrap:anywhere}
+.shooting-body {display:grid;grid-template-columns:minmax(0,var(--shooting-details)) minmax(0,1fr);flex:1;min-height:0}
+.shooting-details {overflow:auto;min-width:0;border-right:var(--chat-stroke) solid var(--border);overscroll-behavior:contain}
+.shooting-agent {display:flex;min-height:0;min-width:0;overflow:hidden}
+.shooting-section {padding:var(--space-4);border-bottom:var(--chat-stroke) solid var(--border)}
+.shooting-section h2 {font-size:var(--text-body);margin-bottom:var(--space-3)}
+.shooting-section dl {margin:0}
+.shooting-section dl>div {display:grid;grid-template-columns:1fr 2fr;gap:var(--space-3);padding:var(--space-1) 0}
+.shooting-section dt {color:var(--muted)}
+.shooting-section dd {margin:0;overflow-wrap:anywhere;min-width:0}
+.shooting-question {padding:var(--space-3) 0;border-top:var(--chat-stroke) solid var(--border);overflow-wrap:anywhere}
+.shooting-question form {display:grid;gap:var(--space-2);margin-top:var(--space-2)}
+.shooting-question label {margin:0;color:var(--muted);font-size:var(--text-small)}
+.shooting-question input {min-width:0;min-height:var(--chat-control);width:100%;background:var(--surface);border:var(--chat-stroke) solid var(--border);border-radius:var(--radius-control);font:inherit;color:var(--text);padding:var(--space-2)}
+.shooting-question input:focus-visible {outline:var(--chat-focus) solid var(--accent);outline-offset:var(--chat-focus)}
+.shooting-question button {justify-self:start}
+.shooting-tabs,.shooting-project-picker {display:none}
+.shooting-agent .agent-header {flex-wrap:wrap;padding:var(--space-4)}
+.shooting-agent .agent-log,.shooting-agent .agent-composer {padding:var(--space-4)}
+@media(max-width:1100px) {
+  .shooting-body {grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) minmax(0,2fr)}
+  .shooting-details {border-right:0;border-bottom:var(--chat-stroke) solid var(--border);max-height:var(--shooting-compact-height)}
+}
+@media(max-width:700px) {
+  body[data-mode=blackmagician] {grid-template-rows:auto minmax(0,1fr)}
+  body[data-mode=blackmagician] .sidebar {padding:var(--space-3) var(--space-4);gap:var(--space-3)}
+  body[data-mode=blackmagician] .sidebar #days,body[data-mode=blackmagician] .sidebar .volumes,
+  body[data-mode=blackmagician] .sidebar .project-nav-heading,body[data-mode=blackmagician] .brand span {display:none}
+  body[data-mode=blackmagician] .sidebar #projects {display:none}
+  .sidebar .mode-switch,body[data-mode=agent] .mode-switch {grid-template-columns:1fr 1fr 1fr}
+  .mode-switch button {padding:var(--space-2);overflow-wrap:anywhere;min-width:0}
+  body[data-mode=blackmagician] .mode-switch {padding:0;border:0}
+  .shooting-header {padding:var(--space-3) var(--space-4)}
+  .shooting-question input,.shooting-question button,.shooting-header button {min-height:var(--chat-touch)}
+  body[data-mode=blackmagician] .shooting-project-picker {display:flex;align-items:center;gap:var(--space-2);font-size:var(--text-small);color:var(--muted);margin:0}
+  .shooting-project-picker select {flex:1;min-width:0;min-height:var(--chat-touch);font:inherit;color:var(--text);background:var(--surface);border:var(--chat-stroke) solid var(--border);border-radius:var(--radius-control)}
+  .shooting-tabs {display:flex;gap:var(--space-2);padding:var(--space-2) var(--space-4);border-bottom:var(--chat-stroke) solid var(--border)}
+  .shooting-tabs button[aria-pressed=true] {background:var(--selected);color:var(--accent)}
+  .shooting-body {display:flex;flex-direction:column}
+  .shooting-details {max-height:none;flex:1}
+  .shooting-agent {flex:1}
+  .shooting-panel[data-view=details] .shooting-agent,.shooting-panel[data-view=agent] .shooting-details {display:none}
+  .shooting-agent .agent-context {display:none}
+  .shooting-agent .agent-header h1 {display:none}
+  .shooting-agent .agent-header {gap:var(--space-2);padding:var(--space-3) var(--space-4)}
+  .shooting-agent .agent-composer {padding:var(--space-3) var(--space-4)}
+  .shooting-agent textarea {min-height:var(--space-12)}
+}

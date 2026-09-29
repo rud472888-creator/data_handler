@@ -35,7 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     private func createWindow() {
         let configuration = WKWebViewConfiguration()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
-        configuration.websiteDataStore = .nonPersistent()
+        configuration.websiteDataStore = .default()
         configuration.userContentController.add(self, name: "pathChooser")
 
         let webView = WKWebView(frame: .zero, configuration: configuration)

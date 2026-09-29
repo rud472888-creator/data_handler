@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import fcntl
 
 from orchestrator.jsonio import read_json, write_json
 from orchestrator.media_preflight import (
@@ -27,7 +28,23 @@ def validate_datahelper_input(run_id: str) -> None:
 
 
 def start_datahelper_stage(run_id: str, *, trigger: str) -> int | None:
+    event_dir = events_dir(run_id)
+    event_dir.mkdir(parents=True, exist_ok=True)
+    with (event_dir / 'datahelper.lock').open('a') as guard:
+        fcntl.flock(guard, fcntl.LOCK_EX)
+        return _start_datahelper_locked(run_id, trigger=trigger)
+
+
+def _start_datahelper_locked(run_id: str, *, trigger: str) -> int | None:
     validate_datahelper_input(run_id)
+    # Enforce strict completion for remotely approved jobs without changing legacy
+    # partial-report workflows. Every worker/watcher path enters this same gate.
+    if (run_dir(run_id) / 'agent/approval.json').is_file():
+        done = read_json(events_dir(run_id) / 'datamanager.done.json')
+        if done.get('status') != 'completed' or done.get('replicas_complete') is not True:
+            update_state(run_id, stage='datamanager', status='review-needed',
+                         error='Replica verification incomplete; automatic review withheld')
+            return None
     event_dir = events_dir(run_id)
     if (event_dir / "datahelper.done.json").exists():
         return None

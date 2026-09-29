@@ -28,6 +28,18 @@ def watch_once(*, direct: bool = False) -> list[dict[str, Any]]:
 def _handle_artifact(artifact: Path, *, direct: bool) -> dict[str, Any]:
     run_id = artifact.parents[1].name
     spec = load_spec(run_id)
+    if (artifact.parents[1] / 'agent/approval.json').is_file():
+        # Remote-agent jobs own their Telegram outbox. Never wake an external LLM
+        # or send duplicate Hermes messages for the same completion.
+        if artifact.name == 'datamanager.done.json':
+            done = read_json(artifact)
+            if done.get('status') == 'completed' and done.get('replicas_complete') is True:
+                from orchestrator.stages import start_datahelper_stage
+                start_datahelper_stage(run_id, trigger='local-agent-completion')
+        elif artifact.name == 'datahelper.done.json':
+            from orchestrator.reporting import write_final_report
+            write_final_report(run_id)
+        return {'run_id': run_id, 'artifact': str(artifact), 'action': 'local_agent'}
     if artifact.name == "datamanager.done.json":
         if direct:
             from orchestrator.cli import continue_datamanager

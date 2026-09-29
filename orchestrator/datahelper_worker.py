@@ -58,14 +58,30 @@ def run_datahelper(run_id: str) -> dict[str, Any]:
     replica_count = len(labels)
     results: list[dict[str, Any]] = []
     for label in labels:
-        results.append(
-            _run_one(
+        try:
+            result = _run_one(
                 label=label,
                 input_path=_footage_input_path(dm_done, label),
                 output_root=_report_output_root(dm_done, label),
                 project_name=f"{spec.project_name} {label} replica",
             )
-        )
+        except Exception as exc:
+            # Failed tool launches must also publish completion evidence so the
+            # operator gets a diagnosis instead of an indefinitely pending job.
+            result = {'label': label, 'status': 'failed', 'exit_code': 1,
+                      'input_path': str(_footage_input_path(dm_done, label)),
+                      'stdout': '', 'stderr': f'{type(exc).__name__}: {exc}',
+                      'missing_artifacts': ['pdf', 'csv', 'json']}
+        results.append(result)
+        # Project report paths are reused by the next card. Preserve this job's
+        # structured evidence before exposing its completion event to reviewers.
+        report = results[-1]
+        saved = run_dir(run_id) / 'agent/report-inputs' / f'{label}.json'
+        report['review_json_path'] = str(saved)
+        try:
+            write_json(saved, read_json(Path(report['json_path'])))
+        except (OSError, ValueError, KeyError):
+            report['review_snapshot_error'] = 'structured_report_unavailable'
         write_progress(
             run_dir(run_id),
             {

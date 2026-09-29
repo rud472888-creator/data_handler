@@ -513,8 +513,10 @@ def _selected_replica_roots(
     project: dict[str, Any],
     requested_roots: list[str] | None,
 ) -> tuple[Path, ...]:
-    values = requested_roots or [str(path) for path in project["replica_roots"]]
-    roots = tuple(Path(value).expanduser().resolve() for value in values if value)
+    values = requested_roots if requested_roots is not None else [str(path) for path in project["replica_roots"]]
+    if any(not value.strip() for value in values):
+        raise HTTPException(status_code=400, detail="destination paths must not be blank")
+    roots = tuple(Path(value.strip()).expanduser().resolve() for value in values)
     if not roots:
         raise HTTPException(status_code=400, detail="at least one destination is required")
     if len(set(roots)) != len(roots):

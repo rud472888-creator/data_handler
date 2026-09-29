@@ -62,7 +62,7 @@ Build the local macOS app bundle and DMG:
 ./script/package_macos_app.sh
 ```
 
-The outputs are `dist/Data Handler.app` and `dist/Data Handler.dmg`. The bundle
+The outputs are `dist/Data Handler DIT.app` and `dist/Data Handler DIT.dmg`. The bundle
 contains the app-front WebView launcher, the orchestrator, DataManager,
 DataHelper, and an app-local Python environment. Runtime state is written to
 `~/Library/Application Support/Data Handler/.pipeline` instead of the signed app

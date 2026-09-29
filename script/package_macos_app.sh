@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_NAME="${APP_NAME:-Data Handler}"
-BUNDLE_ID="${BUNDLE_ID:-com.dit.data-handler}"
+APP_NAME="${APP_NAME:-Data Handler DIT}"
+BUNDLE_ID="${BUNDLE_ID:-com.dit.data-handler.workspace}"
 MIN_SYSTEM_VERSION="13.0"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -19,6 +19,9 @@ ICON_SOURCE="$ROOT_DIR/packaging/assets/DataHandlerIcon.icns"
 ICON_DEST="$APP_RESOURCES/DataHandlerIcon.icns"
 DMG_PATH="$DIST_DIR/$APP_NAME.dmg"
 
+if [[ -z "${PYTHON_BIN:-}" && -x "$ROOT_DIR/.pipeline/agent-venv/bin/python" ]]; then
+  PYTHON_BIN="$ROOT_DIR/.pipeline/agent-venv/bin/python"
+fi
 PYTHON_BIN="${PYTHON_BIN:-$(command -v python3)}"
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
@@ -100,7 +103,12 @@ rsync -a \
   "$APP_ROOT/DataManager" \
   "$APP_ROOT/DataHelper" \
   "fastapi>=0.115" \
+  "httpx>=0.27,<1" \
   "uvicorn[standard]>=0.30"
+
+# Fail packaging if a new bridge dependency is missing from the app-local runtime.
+(cd "$APP_ROOT" && DATA_HANDLER_PIPELINE_ROOT="$BUILD_DIR/smoke-state" \
+  "$VENV_DIR/bin/python" -c 'from orchestrator.dit_app.server import create_app; create_app()')
 
 /usr/bin/codesign --force --deep --sign - "$APP_BUNDLE"
 

@@ -7,26 +7,82 @@
   <title>Data Handler</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/workspace-static/styles.css">
+  <link rel="stylesheet" href="/workspace-static/agent.css">
+  <link rel="stylesheet" href="/workspace-static/blackmagician.css">
+  <link rel="stylesheet" href="/workspace-static/reviews.css">
   <script src="/workspace-static/app.js" defer></script>
+  <script src="/workspace-static/agent.js" defer></script>
+  <script src="/workspace-static/blackmagician.js" defer></script>
+  <script src="/workspace-static/reviews.js" defer></script>
 </head>
 <body>
   <aside class="sidebar">
     <div class="brand">Data Handler<span>촬영 데이터 관리</span></div>
-    <div class="section-head"><h2>프로젝트</h2><button id="newProject" aria-label="새 프로젝트">＋</button></div>
+    <nav class="mode-switch" aria-label="작업 모드"><button id="workspaceMode" aria-pressed="true">작업 공간</button><button id="agentMode" aria-pressed="false">에이전트</button><button id="blackmagicianLiveMode" aria-pressed="false">Blackmagician</button></nav>
+    <div class="section-head project-nav-heading"><h2>프로젝트</h2><button id="newProject" aria-label="새 프로젝트">＋</button></div>
     <nav id="projects" aria-label="프로젝트 목록"><p class="muted">불러오는 중…</p></nav>
+    <label class="shooting-project-picker" for="shootingProjectSelect">촬영 프로젝트<select id="shootingProjectSelect"></select></label>
     <nav id="days" aria-label="촬영일 목록"></nav>
     <section class="volumes"><div class="section-head"><h2>연결된 볼륨</h2><button id="refreshVolumes" aria-label="볼륨 새로고침">↻</button></div><div id="volumes"></div></section>
   </aside>
   <main>
-    <header class="toolbar"><div><h1 id="projectTitle">프로젝트 라이브러리</h1><p id="projectSubtitle">프로젝트를 만들거나 왼쪽에서 선택하세요.</p></div><div class="toolbar-actions"><button id="removeProject" disabled>프로젝트 제거</button><button class="primary" id="importCard" disabled>카드 가져오기</button></div></header>
+    <section id="shootingPanel" class="shooting-panel" aria-label="Blackmagician 촬영 모드" hidden>
+      <header class="shooting-header"><div><h1>Blackmagician 모드</h1><p id="shootingProject" class="muted">프로젝트를 선택하세요</p><p id="shootingStatus" role="status">연결 없음</p></div><div class="blackmagician-actions"><button id="shootingSettings">세션 연결</button><button id="shootingPause" disabled>수신 일시정지</button></div></header>
+      <p id="shootingError" class="error" role="alert" hidden></p>
+      <nav class="shooting-tabs" aria-label="촬영 모드 보기"><button id="shootingShowDetails" aria-pressed="true">촬영 정보</button><button id="shootingShowAgent" aria-pressed="false">에이전트 대화</button></nav>
+      <div class="shooting-body"><aside id="shootingDetails" class="shooting-details" aria-label="촬영 정보"><div id="shootingOverview"></div><section class="shooting-section"><h2>확인할 촬영 정보</h2><div id="shootingQuestions"></div></section><section class="shooting-section"><h2>최근 촬영 기록</h2><div id="shootingEntries"></div></section></aside><div id="shootingAgent" class="shooting-agent"></div></div>
+    </section>
+    <section id="agentPanel" class="agent-panel" aria-label="에이전트 채팅" hidden>
+      <header class="agent-header"><div><h1>에이전트</h1><p id="agentConnection" class="muted">로컬 에이전트 연결 확인 중</p></div><div class="agent-history"><label class="sr-only" for="agentHistory">이전 대화</label><select id="agentHistory"><option value="">새 대화</option></select><button id="agentNew">새 대화</button></div></header>
+      <div id="agentNotice" class="agent-notice" hidden><p id="agentError" role="alert"></p><button id="agentReconnect">다시 연결</button></div>
+      <div id="agentLog" class="agent-log" role="log" aria-label="작업 대화" aria-live="polite"></div>
+      <form id="agentForm" class="agent-composer">
+        <div class="agent-context"><label for="agentProject">프로젝트</label><select id="agentProject"><option value="">대화에서 지정</option></select><span id="agentContextHint" class="muted">원본과 백업 경로를 1개 이상 알려 주세요.</span></div>
+        <label class="sr-only" for="agentInput">에이전트에게 요청</label>
+        <div class="agent-input-row"><textarea id="agentInput" rows="3" maxlength="6000" placeholder="예: 오늘 촬영 카드를 지정한 경로에 백업해줘" required></textarea><button id="agentSend" type="submit" class="primary" disabled>전송</button></div>
+        <div class="agent-composer-footer"><span id="agentSendHint" class="muted">경로를 확인한 뒤 복제를 시작합니다.</span><span class="muted">Shift + Enter로 줄바꿈</span></div>
+      </form>
+    </section>
+    <header class="toolbar"><div><h1 id="projectTitle">프로젝트 라이브러리</h1><p id="projectSubtitle">프로젝트를 만들거나 왼쪽에서 선택하세요.</p></div><div class="toolbar-actions"><button id="blackmagicianButton" disabled>Blackmagician</button><button id="removeProject" disabled>프로젝트 제거</button><button class="primary" id="importCard" disabled>카드 가져오기</button></div></header>
     <div id="removedNotice" class="removal-notice" hidden><span id="removedMessage"></span><button id="undoRemove">되돌리기</button></div>
     <div id="error" class="error" role="alert" hidden></div>
     <div class="library-toolbar"><div class="tabs" aria-label="보기"><button id="libraryTab" aria-pressed="true">카드</button><button id="reportsTab" aria-pressed="false">PDF 리포트</button></div><label class="search"><span class="sr-only">카드 검색</span><input id="search" type="search" placeholder="카드·카메라·원본 경로 검색"></label><button id="refresh">새로고침</button></div>
-    <div class="workspace"><section class="library" aria-label="카드 라이브러리"><div id="content"></div><footer id="librarySummary"></footer></section><aside id="inspector" class="inspector" aria-label="선택 카드 상세"><h2>카드 상세</h2><p class="muted">카드를 선택하면 원본, 복제 위치와 리포트를 확인할 수 있습니다.</p></aside></div>
+    <div class="workspace">
+      <section class="library" aria-label="카드 라이브러리"><div id="content"></div><footer id="librarySummary"></footer></section>
+      <aside class="workspace-reviews" aria-labelledby="reviewTitle">
+        <header class="section-head"><div><h2 id="reviewTitle">에이전트 검토</h2><p id="reviewContext" class="muted">카드를 선택하세요.</p></div><button id="reviewRetry" disabled>다시 검토</button></header>
+        <nav id="reviewOverview" aria-label="검토 항목 바로가기"></nav>
+        <p id="reviewError" class="error" role="alert" hidden></p>
+        <p id="reviewAnnouncement" class="sr-only" role="status"></p>
+        <div id="reviewMessages"><p class="muted">복제와 보고서 작업이 끝나면 에이전트의 검토 결과가 여기에 표시됩니다.</p></div>
+      </aside>
+    </div>
     <section class="queue" aria-label="작업 상태"><div class="section-head"><h2>작업 상태</h2><span id="syncTime" class="muted">기록을 불러오는 중</span></div><div id="queue"></div></section>
   </main>
   <dialog id="projectDialog" aria-labelledby="projectDialogTitle"><form id="projectForm"><header><h2 id="projectDialogTitle">새 프로젝트</h2><button type="button" data-close="projectDialog" aria-label="닫기">×</button></header><p class="muted">프로젝트를 먼저 만들고, 촬영 카드는 필요할 때 추가하세요.</p><label>프로젝트 이름<input name="name" required maxlength="100" autocomplete="off" placeholder="예: 단편영화 야간 촬영"></label><p id="projectError" class="error" role="alert" hidden></p><footer><button type="button" data-close="projectDialog">취소</button><button class="primary" type="submit">프로젝트 만들기</button></footer></form></dialog>
-  <dialog id="importDialog" aria-labelledby="importTitle"><form id="importForm"><header><h2 id="importTitle">카드 가져오기</h2><button type="button" data-close="importDialog" aria-label="닫기">×</button></header><p id="importProject" class="muted"></p><div id="importFields"><div class="form-row"><label>촬영일<input type="date" name="shoot_date" required></label><label>카메라<input name="camera_unit" value="A" pattern="[A-Za-z0-9_-]+" required maxlength="20"></label></div><label>원본 카드 폴더<input name="source_path" required placeholder="/Volumes/CAMERA_CARD" list="sourceChoices" autocomplete="off"></label><datalist id="sourceChoices"></datalist><label>복제 위치 1<input name="replica1" required placeholder="/Volumes/SHUTTLE_01" list="destinationChoices" autocomplete="off"></label><label>복제 위치 2<input name="replica2" required placeholder="/Volumes/SHUTTLE_02" list="destinationChoices" autocomplete="off"></label><datalist id="destinationChoices"></datalist><p class="muted">원본 폴더를 각 위치에 복사하고 체크섬을 검증한 뒤 PDF를 생성합니다. 카드 번호는 프로젝트 전체에서 연속 배정됩니다. 날짜와 카메라는 기록으로만 저장하며, 파일은 001_Footage/R#n 아래에 바로 복사됩니다.</p></div><div id="importReview" hidden></div><p id="importError" class="error" role="alert" hidden></p><footer><button type="button" id="importBack" hidden>수정</button><button type="button" data-close="importDialog">취소</button><button class="primary" type="submit" id="importSubmit">경로 확인</button></footer></form></dialog>
+  <dialog id="importDialog" aria-labelledby="importTitle"><form id="importForm"><header><h2 id="importTitle">카드 가져오기</h2><button type="button" data-close="importDialog" aria-label="닫기">×</button></header><p id="importProject" class="muted"></p><div id="importFields"><div class="form-row"><label>촬영일<input type="date" name="shoot_date" required></label><label>카메라<input name="camera_unit" value="A" pattern="[A-Za-z0-9_-]+" required maxlength="20"></label></div><label>원본 카드 폴더<input name="source_path" required placeholder="/Volumes/CAMERA_CARD" list="sourceChoices" autocomplete="off"></label><datalist id="sourceChoices"></datalist><section class="replica-section" aria-labelledby="replicaTitle"><div class="replica-row-header"><h3 id="replicaTitle">백업 경로</h3><span id="replicaCount" class="muted" role="status" aria-live="polite"></span></div><p class="muted">1개부터 필요한 만큼 추가할 수 있습니다.</p><div id="replicaPaths"></div><button type="button" id="addReplica">백업 경로 추가</button></section><datalist id="destinationChoices"></datalist><p class="muted">원본 폴더를 각 위치에 복사하고 체크섬을 검증한 뒤 PDF를 생성합니다. 카드 번호는 프로젝트 전체에서 연속 배정됩니다. 날짜와 카메라는 기록으로만 저장하며, 파일은 001_Footage/R#n 아래에 바로 복사됩니다.</p></div><div id="importReview" hidden></div><p id="importError" class="error" role="alert" hidden></p><footer><button type="button" id="importBack" hidden>수정</button><button type="button" data-close="importDialog">취소</button><button class="primary" type="submit" id="importSubmit">경로 확인</button></footer></form></dialog>
   <dialog id="removeDialog" aria-labelledby="removeTitle"><form id="removeForm"><header><h2 id="removeTitle">프로젝트를 목록에서 제거할까요?</h2><button type="button" data-close="removeDialog" aria-label="닫기">×</button></header><p id="removeName"></p><p class="muted">프로젝트가 목록에서 사라집니다. 원본, 백업, PDF 파일과 작업 기록은 보존됩니다.</p><p id="removeError" class="error" role="alert" hidden></p><footer><button type="button" data-close="removeDialog">취소</button><button type="submit" class="remove-action">목록에서 제거</button></footer></form></dialog>
+  <dialog id="blackmagicianDialog" aria-labelledby="blackmagicianTitle">
+    <div class="blackmagician-panel">
+      <header><div><h2 id="blackmagicianTitle">Blackmagician</h2><p id="blackmagicianProject" class="muted">프로젝트 선택 필요</p></div><button type="button" data-close="blackmagicianDialog" aria-label="닫기">×</button></header>
+      <form id="blackmagicianConnectForm" class="blackmagician-connect">
+        <div class="blackmagician-field-row">
+          <label>접속 방식<select id="blackmagicianMode" name="mode"><option value="invite">초대 코드</option><option value="session">세션 ID</option></select></label>
+          <label>접속 코드<input id="blackmagicianCode" name="code" autocomplete="off" spellcheck="false" placeholder="코드 입력"></label>
+        </div>
+        <label id="blackmagicianProjectIdField">Blackmagician 프로젝트 ID<input id="blackmagicianProjectId" name="project_id" autocomplete="off" spellcheck="false" placeholder="중복 세션일 때 입력"></label>
+        <div id="blackmagicianMatches" class="blackmagician-matches" hidden></div>
+        <div class="blackmagician-actions">
+          <button id="blackmagicianConnect" class="primary" type="submit" disabled>연결</button>
+          <button id="blackmagicianRefresh" type="button" disabled>스냅샷 새로고침</button>
+          <button id="blackmagicianReview" type="button" disabled>백업 검토</button>
+          <button id="blackmagicianAgent" type="button" disabled>에이전트로 검토</button>
+          <button id="blackmagicianDisconnect" type="button" disabled>연결 해제</button>
+        </div>
+      </form>
+      <p id="blackmagicianError" class="error" role="alert" hidden></p>
+      <div id="blackmagicianContent" class="blackmagician-content"></div>
+    </div>
+  </dialog>
 </body>
 </html>

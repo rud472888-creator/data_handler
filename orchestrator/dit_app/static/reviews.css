@@ -1,0 +1,32 @@
+.workspace-reviews {display:flex;flex-direction:column;border-left:var(--chat-stroke) solid var(--border);padding:var(--space-6);min-height:0;min-width:0;overflow:hidden;overflow-wrap:anywhere}
+.workspace-reviews>header {align-items:flex-start;flex-shrink:0;margin-bottom:var(--space-3)}
+.workspace-reviews h2 {font-size:var(--text-heading)}
+.workspace-reviews>header button {flex-shrink:0}
+#reviewMessages {flex:1;min-height:0;overflow:auto;overscroll-behavior:contain}
+#reviewOverview {display:flex;gap:var(--space-2);flex-wrap:wrap;flex-shrink:0;margin-bottom:var(--space-2)}
+#reviewOverview:empty {display:none}
+#reviewOverview button {font-size:var(--text-small);padding:var(--space-1) var(--space-2)}
+.review-message {padding:var(--space-3) 0;border-top:var(--chat-stroke) solid var(--border)}
+.review-message header {display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap}
+.review-message h3 {font-size:var(--text-body);font-weight:600;margin:0}
+.review-message p,.review-message details,.review-message>a {display:block;margin-top:var(--space-2)}
+.review-message .review-analysis {white-space:pre-wrap}
+.review-message summary {color:var(--accent);cursor:pointer;min-height:var(--chat-control);padding:var(--space-2) 0}
+.review-message summary:focus-visible {outline:var(--chat-focus) solid var(--accent);outline-offset:var(--chat-focus)}
+.review-finding {margin:0;padding:var(--space-3) 0;border-top:var(--chat-stroke) solid var(--border)}
+.review-finding dt {color:var(--muted);font-size:var(--text-small);margin-top:var(--space-2)}
+.review-finding dd {margin:var(--space-1) 0 0}
+@media(min-width:1101px) {
+  .library #content {flex:1;min-height:0}
+  .library>footer {flex-shrink:0}
+}
+@media(max-width:1100px) {
+  .workspace-reviews {border-left:0;border-top:var(--chat-stroke) solid var(--border)}
+  #reviewMessages {flex:auto;max-height:var(--chat-min)}
+}
+@media(max-width:700px) {
+  #days {min-height:var(--chat-touch)}
+  #volumes {min-height:calc(var(--chat-touch) + var(--space-4))}
+  .workspace-reviews {padding:var(--space-4)}
+  .review-message summary {min-height:var(--chat-touch)}
+}

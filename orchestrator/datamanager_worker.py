@@ -132,6 +132,13 @@ def _run(run_id: str) -> dict[str, Any]:
     report_paths = _report_paths(report_root, reports)
     replicas_complete = _replicas_complete(files, replica_project_roots, data_manager_path_ids)
     manifest_ready = Path(report_paths.get("manifest_json", "")).is_file()
+    if manifest_ready:
+        # The engine's project manifest is replaced by the next card. Preserve the
+        # completed job's file-level evidence inside its durable run directory.
+        from orchestrator.jsonio import read_json
+        manifest = read_json(Path(report_paths['manifest_json']))
+        if manifest.get('job_id') == job.job_id:
+            write_json(run_dir(run_id) / 'blackmagician/manifest.json', manifest)
     checksum_ready = Path(report_paths.get("checksum_pdf", "")).is_file()
     status = "completed" if completed_job.state == "COMPLETED" and replicas_complete else "warn"
     if completed_job.state == "FAILED":
