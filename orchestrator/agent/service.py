@@ -157,7 +157,8 @@ class AgentService:
                 from orchestrator.cli import start_run
                 start_run(source=Path(plan['source_path']), replica_paths=replicas,
                           project_name=plan['project_name'], profile='macbook-dit-agent',
-                          run_id=run_id, footage_run_name=record.roll, flat_card_layout=True)
+                          run_id=run_id, footage_run_name=record.roll, flat_card_layout=True,
+                          visual_qa=bool((self.registry.find_project(plan['project_id']) or {}).get('visual_qa')))
             self.registry.mark_run_started(run_id)
             status = 'started'
         except Exception as exc:

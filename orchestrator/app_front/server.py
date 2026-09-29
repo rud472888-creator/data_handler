@@ -205,6 +205,7 @@ def create_app(
                 run_id=run_id,
                 footage_run_name=record.roll if flat_card_layout else f"{payload.shoot_date}/{payload.camera_unit}/{record.roll}",
                 run_mode=run_mode,
+                visual_qa=payload.visual_qa if payload.visual_qa is not None else bool(project.get("visual_qa")),
                 **({"flat_card_layout": True} if flat_card_layout else {}),
             )
         except MediaDependencyPreflightError as exc:

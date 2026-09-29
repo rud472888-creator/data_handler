@@ -71,6 +71,7 @@ def card_snapshot(record: dict[str, Any], runs_root: Path) -> dict[str, Any]:
     else:
         phase = "waiting"
     artifacts = _artifact_payloads(run_id, folder)
+    from orchestrator.visual_qa.scheduler import qa_summary
     from orchestrator.agent.reviews import review_messages
     reviews = review_messages(folder)
     if phase != 'failed' and any(r.get('status') == 'review_needed' for r in reviews):
@@ -96,6 +97,8 @@ def card_snapshot(record: dict[str, Any], runs_root: Path) -> dict[str, Any]:
         # The list carries review summaries only; the selected card loads its
         # findings from /api/library/cards/{run_id}/reviews.
         "agent_reviews": [review_summary(r) for r in reviews],
+        # Independent of phase/verified above: a QA result never changes backup state.
+        "visual_qa": qa_summary(run_id, runs_root),
     }
 
 
@@ -113,6 +116,12 @@ def create_app(**engine_options: Any) -> FastAPI:
     async def lifespan(app):
         from orchestrator.agent.reviews import start_collector
         stopped, worker = start_collector(Path(registry_path).parent, runs_root, registry)
+        # Restart QA workers that died mid-run; never starts new inspections.
+        from orchestrator.visual_qa.scheduler import recover_orphans
+        try:
+            recover_orphans(Path(runs_root))
+        except Exception:
+            pass
         yield
         stopped.set()
 
@@ -121,6 +130,8 @@ def create_app(**engine_options: Any) -> FastAPI:
     app.include_router(create_router(Path(registry_path).parent, Path(runs_root), registry))
     from orchestrator.dit_app.blackmagician_bridge import create_router as blackmagician_router
     app.include_router(blackmagician_router(Path(registry_path).parent, Path(runs_root), registry))
+    from orchestrator.dit_app.visual_qa_bridge import create_router as visual_qa_router
+    app.include_router(visual_qa_router(Path(runs_root), registry))
     app.mount("/workspace-static", StaticFiles(directory=STATIC), name="workspace-static")
 
     @app.get("/")

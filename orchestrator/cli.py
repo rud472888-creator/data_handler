@@ -17,6 +17,7 @@ from orchestrator.reporting import datamanager_message, final_message, write_fin
 from orchestrator.run_state import events_dir, load_spec, save_spec, update_state, utc_now
 from orchestrator.spec import RUN_MODE_DATAMANAGER, RUN_MODE_WORKFLOW, RunSpec
 from orchestrator.stages import start_datahelper_stage
+from orchestrator.visual_qa.scheduler import schedule_after_completion
 from orchestrator.watcher import watch_once
 
 
@@ -34,6 +35,11 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--profile", default=DEFAULT_HERMES_PROFILE)
     start.add_argument("--run-id")
     start.add_argument("--mode", choices=(RUN_MODE_WORKFLOW, RUN_MODE_DATAMANAGER), default=RUN_MODE_WORKFLOW)
+    start.add_argument(
+        "--visual-qa",
+        action="store_true",
+        help="Queue the post-completion visual QA once backup verification and reports finish.",
+    )
 
     dm = subparsers.add_parser("continue-datamanager", help="Handle DataManager completion.")
     dm.add_argument("--run-id", required=True)
@@ -56,7 +62,93 @@ def build_parser() -> argparse.ArgumentParser:
     app.add_argument("--host", default="127.0.0.1")
     app.add_argument("--port", type=int, default=8750)
 
+    _add_visual_qa_parser(subparsers)
     return parser
+
+
+def _add_visual_qa_parser(subparsers: Any) -> None:
+    qa = subparsers.add_parser("visual-qa", help="Post-completion visual QA (separate from agent reviews).")
+    sub = qa.add_subparsers(dest="qa_command", required=True)
+    start = sub.add_parser("start", help="Start or resume the visual QA of a finished run.")
+    start.add_argument("--run-id", required=True)
+    start.add_argument("--new-revision", action="store_true", help="Inspect again into a new revision directory.")
+    start.add_argument("--foreground", action="store_true", help="Run in this process instead of a background worker.")
+    start.add_argument("--start-frame", type=int)
+    start.add_argument("--end-frame", type=int)
+    start.add_argument("--max-frames-per-clip", type=int)
+    start.add_argument("--max-clips", type=int)
+    start.add_argument("--model-max-side", type=int)
+    status = sub.add_parser("status", help="Print the visual QA status of a run.")
+    status.add_argument("--run-id", required=True)
+    report = sub.add_parser("report", help="Regenerate findings.json and report.html from the stored journal.")
+    report.add_argument("--run-id", required=True)
+    report.add_argument("--qa-id", required=True)
+    install = sub.add_parser("install-model", help="Download or register the Qwen3.5-4B weights (explicit step).")
+    install.add_argument("--source-repo", default="Qwen/Qwen3.5-4B")
+    install.add_argument("--revision")
+    install.add_argument("--quantization")
+    install.add_argument("--derived-from")
+    install.add_argument("--local-path", help="Register an already-downloaded model folder without network access.")
+    smoke = sub.add_parser("smoke", help="Real-model smoke test on normal and anomalous synthetic clips.")
+    smoke.add_argument("--output", required=True)
+
+
+def _visual_qa_command(args: argparse.Namespace) -> int:
+    import json
+
+    from orchestrator.visual_qa import scheduler
+
+    if args.qa_command == "start":
+        overrides = {key: value for key, value in {
+            "start_frame": args.start_frame, "end_frame": args.end_frame,
+            "max_frames_per_clip": args.max_frames_per_clip, "max_clips": args.max_clips,
+            "model_max_side": args.model_max_side}.items() if value is not None}
+        try:
+            result = scheduler.schedule_visual_qa(
+                args.run_id, trigger="cli", manual=True, new_revision=args.new_revision, config=overrides or None,
+                spawn=(lambda run_id, qa_id: 0) if args.foreground else None)
+        except scheduler.ScheduleError as exc:
+            print(f"blocked ({exc.code}): {exc}")
+            return 2
+        print(json.dumps(result, ensure_ascii=False))
+        if args.foreground and result.get("action") in {"spawned", "retry", "recovered"}:
+            from orchestrator.visual_qa import worker
+
+            state = worker.run(args.run_id, result["qa_id"])
+            print(json.dumps({"status": state.get("status"), "reason": state.get("reason"), "counts": state.get("counts")},
+                             ensure_ascii=False))
+        return 0
+    if args.qa_command == "status":
+        print(json.dumps(scheduler.qa_summary(args.run_id), ensure_ascii=False, indent=2))
+        return 0
+    if args.qa_command == "report":
+        from orchestrator.visual_qa.runner import rebuild_outputs
+
+        if not scheduler.is_valid_qa_id(args.qa_id):
+            print("invalid qa id")
+            return 2
+        error = rebuild_outputs(scheduler.visual_qa_root(args.run_id) / args.qa_id)
+        print(error or str(scheduler.visual_qa_root(args.run_id) / args.qa_id / "report.html"))
+        return 1 if error else 0
+    if args.qa_command == "install-model":
+        from orchestrator.visual_qa.install import install_model
+
+        record = install_model(source_repo=args.source_repo, revision=args.revision, quantization=args.quantization,
+                               derived_from=args.derived_from, local_path=Path(args.local_path) if args.local_path else None)
+        print(json.dumps(record, ensure_ascii=False, indent=2))
+        return 0
+    if args.qa_command == "smoke":
+        from orchestrator.visual_qa.backend import BackendUnavailable, MlxVlmBackend
+        from orchestrator.visual_qa.smoke import run_smoke
+
+        try:
+            result = run_smoke(MlxVlmBackend(), Path(args.output))
+        except BackendUnavailable as exc:
+            print(f"blocked ({exc.code}): {exc}")
+            return 2
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["image_input_check"]["passed"] else 1
+    raise AssertionError(args.qa_command)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -69,6 +161,7 @@ def main(argv: list[str] | None = None) -> int:
             profile=args.profile,
             run_id=args.run_id,
             run_mode=args.mode,
+            visual_qa=args.visual_qa,
         )
         print(run_id)
         return 0
@@ -82,6 +175,8 @@ def main(argv: list[str] | None = None) -> int:
         for action in watch_once(direct=args.direct):
             print(action)
         return 0
+    if args.command == "visual-qa":
+        return _visual_qa_command(args)
     if args.command == "console":
         import uvicorn
 
@@ -116,6 +211,7 @@ def start_run(
     footage_run_name: str | None = None,
     run_mode: str = RUN_MODE_WORKFLOW,
     flat_card_layout: bool = False,
+    visual_qa: bool = False,
 ) -> str:
     active_run_id = run_id or f"run-{uuid4().hex[:12]}"
     active_source_paths = source_paths or ((source,) if source is not None else ())
@@ -131,6 +227,7 @@ def start_run(
         footage_run_name=footage_run_name,
         run_mode=run_mode,
         flat_card_layout=flat_card_layout,
+        visual_qa=visual_qa,
     )
     save_spec(spec)
     update_state(active_run_id, stage="media-preflight", status="running")
@@ -196,6 +293,7 @@ def continue_datamanager(run_id: str) -> None:
         return
     if spec.run_mode == RUN_MODE_DATAMANAGER:
         update_state(run_id, stage="datamanager", status=str(done.get("status") or "completed"))
+        schedule_after_completion(run_id, "continue_datamanager")
         return
     event_dir = events_dir(run_id)
     if (event_dir / "datahelper.done.json").exists():
@@ -224,8 +322,9 @@ def continue_datahelper(run_id: str) -> None:
             status="failed",
             error="DataHelper failed; final report was generated for review",
         )
-        return
-    update_state(run_id, stage="done", status="completed")
+    else:
+        update_state(run_id, stage="done", status="completed")
+    schedule_after_completion(run_id, "continue_datahelper")
 
 
 def _datahelper_failed(done: dict[str, Any]) -> bool:

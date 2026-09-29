@@ -1,0 +1,8 @@
+# Dedicated visual-QA environment (kept apart from the backup/app environment).
+# mlx-vlm 0.7.4 is the version whose API (load / apply_chat_template / generate with
+# enable_thinking, Qwen3.5 support) was checked against the source; re-check when bumping.
+mlx-vlm==0.7.4
+av>=13
+pillow>=10.3
+numpy
+huggingface_hub

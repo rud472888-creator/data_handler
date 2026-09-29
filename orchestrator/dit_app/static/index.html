@@ -10,10 +10,12 @@
   <link rel="stylesheet" href="/workspace-static/agent.css">
   <link rel="stylesheet" href="/workspace-static/blackmagician.css">
   <link rel="stylesheet" href="/workspace-static/reviews.css">
+  <link rel="stylesheet" href="/workspace-static/visualqa.css">
   <script src="/workspace-static/app.js" defer></script>
   <script src="/workspace-static/agent.js" defer></script>
   <script src="/workspace-static/blackmagician.js" defer></script>
   <script src="/workspace-static/reviews.js" defer></script>
+  <script src="/workspace-static/visualqa.js" defer></script>
 </head>
 <body>
   <aside class="sidebar">
@@ -50,6 +52,15 @@
     <div class="workspace">
       <section class="library" aria-label="카드 라이브러리"><div id="content"></div><footer id="librarySummary"></footer></section>
       <aside class="workspace-reviews" aria-labelledby="reviewTitle">
+        <section id="visualQa" class="visual-qa" aria-labelledby="visualQaTitle">
+          <header class="section-head"><div><h2 id="visualQaTitle">영상 QA</h2><p id="visualQaContext" class="muted">카드를 선택하세요.</p></div><span id="visualQaStatus" class="status muted">-</span></header>
+          <p id="visualQaSummary" class="visual-qa-summary"></p>
+          <p id="visualQaNotice" class="visual-qa-notice" hidden></p>
+          <p id="visualQaError" class="error" role="alert" hidden></p>
+          <div class="visual-qa-actions"><button id="visualQaStart" disabled>영상 QA 시작</button><button id="visualQaCancel" hidden>취소</button><a id="visualQaReport" href="#" target="_blank" rel="noopener" hidden>보고서 열기 ↗</a></div>
+          <label class="visual-qa-option"><input id="visualQaAuto" type="checkbox"><span>이 프로젝트의 새 카드는 완료 후 영상 QA 자동 실행</span></label>
+          <p id="visualQaAnnouncement" class="sr-only" role="status"></p>
+        </section>
         <header class="section-head"><div><h2 id="reviewTitle">에이전트 검토</h2><p id="reviewContext" class="muted">카드를 선택하세요.</p></div><button id="reviewRetry" disabled>다시 검토</button></header>
         <nav id="reviewOverview" aria-label="검토 항목 바로가기"></nav>
         <p id="reviewError" class="error" role="alert" hidden></p>

@@ -2,6 +2,8 @@
 
 로컬 AI 및 Telegram 원격 작업은 [로컬 에이전트 사용법](orchestrator/agent/README.md)을 참고하세요. 확인된 복제 계획은 Mac에서 오프라인으로 실행하고, 연결이 복구되면 완료보고와 PDF를 전송합니다.
 
+영상 QA(작업 완료 후 Qwen3.5-4B 시각 검사)는 [영상 QA](docs/visual-qa.md)와 [검증 기록](docs/visual-qa-validation.md)을 참고하세요. 실제 모델 검증은 Apple Silicon Mac에서 별도로 실행해야 합니다.
+
 새 기본 화면은 프로젝트·촬영일·카드를 중심으로 구성한 DIT 작업 공간입니다. 새 프로젝트 생성, 카드 가져오기, 검증 결과와 앱 내 PDF 미리보기는 [DIT 작업 공간 사용법](orchestrator/dit_app/README.md)을 참고하세요. 아래의 `New / Review`, `Runs` 등은 이전 화면 설명입니다.
 
 Data Handler는 촬영 원본을 여러 위치로 복제하고, 복제 결과와 클립 검수 리포트를 같은 실행 기록 안에 남기는 로컬 운영 도구입니다. 최상위 `orchestrator`가 `DataManager`로 복제를 시작하고, 완료 이벤트가 생기면 `DataHelper` 검수 단계를 한 번만 이어서 실행합니다.
