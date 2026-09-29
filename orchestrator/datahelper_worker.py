@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import shutil
 import subprocess
 import sys
@@ -53,50 +54,37 @@ def run_datahelper(run_id: str) -> dict[str, Any]:
             },
         )
         return payload
-    labels = sorted(replica_project_roots)
+    labels = sorted(replica_project_roots, key=_label_order)
     file_count = dm_done.get("file_count")
     replica_count = len(labels)
-    results: list[dict[str, Any]] = []
-    for label in labels:
-        try:
-            result = _run_one(
-                label=label,
-                input_path=_footage_input_path(dm_done, label),
-                output_root=_report_output_root(dm_done, label),
-                project_name=f"{spec.project_name} {label} replica",
+    card = _card_name(spec, dm_done)
+    by_label: dict[str, dict[str, Any]] = {}
+    # Each backup is decoded independently, so run them side by side. Frame Proof
+    # is mostly I/O bound on separate drives; cap workers to protect the CPU.
+    with ThreadPoolExecutor(max_workers=_report_workers(len(labels))) as pool:
+        futures = {
+            pool.submit(_run_label, run_id, spec.project_name, card, dm_done, label): label
+            for label in labels
+        }
+        for future in as_completed(futures):
+            label = futures[future]
+            by_label[label] = future.result()
+            finished = list(by_label.values())
+            write_progress(
+                run_dir(run_id),
+                {
+                    "stage": "datahelper",
+                    "status": "running",
+                    "step": "reports",
+                    "current": len(finished),
+                    "total": len(labels),
+                    "file_count": file_count,
+                    "replica_count": replica_count,
+                    "report_completed": sum(1 for result in finished if result["status"] == "completed"),
+                    "report_total": len(labels),
+                },
             )
-        except Exception as exc:
-            # Failed tool launches must also publish completion evidence so the
-            # operator gets a diagnosis instead of an indefinitely pending job.
-            result = {'label': label, 'status': 'failed', 'exit_code': 1,
-                      'input_path': str(_footage_input_path(dm_done, label)),
-                      'stdout': '', 'stderr': f'{type(exc).__name__}: {exc}',
-                      'missing_artifacts': ['pdf', 'csv', 'json']}
-        results.append(result)
-        # Project report paths are reused by the next card. Preserve this job's
-        # structured evidence before exposing its completion event to reviewers.
-        report = results[-1]
-        saved = run_dir(run_id) / 'agent/report-inputs' / f'{label}.json'
-        report['review_json_path'] = str(saved)
-        try:
-            write_json(saved, read_json(Path(report['json_path'])))
-        except (OSError, ValueError, KeyError):
-            report['review_snapshot_error'] = 'structured_report_unavailable'
-        write_progress(
-            run_dir(run_id),
-            {
-                "stage": "datahelper",
-                "status": "running",
-                "step": "reports",
-                "current": len(results),
-                "total": len(labels),
-                "file_count": file_count,
-                "replica_count": replica_count,
-                "report_completed": sum(1 for result in results if result["status"] == "completed"),
-                "report_total": len(labels),
-                "report_count": _report_count(dm_done, results),
-            },
-        )
+    results = [by_label[label] for label in labels]
     if all(result["status"] == "completed" for result in results):
         status = "completed"
     elif any(result["exit_code"] != 0 for result in results):
@@ -129,7 +117,73 @@ def run_datahelper(run_id: str) -> dict[str, Any]:
             "artifacts_ready": all(result["status"] == "completed" for result in results),
         },
     )
+    _finalize(run_id, status)
     return payload
+
+
+def _finalize(run_id: str, status: str) -> None:
+    """Close the backup-to-report chain locally; Hermes delivery stays optional."""
+    try:
+        from orchestrator.reporting import write_final_report
+
+        write_final_report(run_id)
+    except Exception:  # The per-card PDFs remain the authoritative deliverables.
+        return
+    if status == "completed":
+        update_state(run_id, stage="done", status="completed")
+    elif status == "failed":
+        update_state(run_id, stage="done", status="failed",
+                     error="DataHelper failed; final report was generated for review")
+
+
+def _run_label(run_id: str, project_name: str, card: str, dm_done: dict[str, Any], label: str) -> dict[str, Any]:
+    try:
+        result = _run_one(
+            label=label,
+            input_path=_footage_input_path(dm_done, label),
+            output_root=_report_output_root(dm_done, label),
+            project_name=f"{project_name} {card} {_replica_title(label)}".replace("  ", " "),
+        )
+    except Exception as exc:
+        # Failed tool launches must also publish completion evidence so the
+        # operator gets a diagnosis instead of an indefinitely pending job.
+        result = {'label': label, 'status': 'failed', 'exit_code': 1,
+                  'input_path': str(_footage_input_path(dm_done, label)),
+                  'stdout': '', 'stderr': f'{type(exc).__name__}: {exc}',
+                  'missing_artifacts': ['pdf', 'csv', 'json']}
+    # Preserve this job's structured evidence before exposing its completion
+    # event to reviewers.
+    saved = run_dir(run_id) / 'agent/report-inputs' / f'{label}.json'
+    result['review_json_path'] = str(saved)
+    try:
+        write_json(saved, read_json(Path(result['json_path'])))
+    except (OSError, ValueError, KeyError):
+        result['review_snapshot_error'] = 'structured_report_unavailable'
+    return result
+
+
+def _label_order(label: str) -> tuple[int, str]:
+    digits = label[4:] if label.startswith("path") else ""
+    return (int(digits), label) if digits.isdigit() else (1 << 30, label)
+
+
+def _card_name(spec: Any, dm_done: dict[str, Any]) -> str:
+    relpath = dm_done.get("card_report_relpath")
+    if relpath:
+        return Path(str(relpath)).name
+    return Path(str(spec.footage_run_name)).name if spec.footage_run_name else ""
+
+
+def _replica_title(label: str) -> str:
+    digits = label[4:] if label.startswith("path") else ""
+    return f"백업 {digits}" if digits.isdigit() else f"{label} replica"
+
+
+def _report_workers(count: int) -> int:
+    configured = os.environ.get("DATA_HANDLER_REPORT_WORKERS", "")
+    if configured.isdigit() and int(configured) > 0:
+        return min(count, int(configured))
+    return max(1, min(count, 4, (os.cpu_count() or 2) // 2 or 1))
 
 
 def _run_one(label: str, input_path: Path, output_root: Path, project_name: str) -> dict[str, Any]:
@@ -297,9 +351,12 @@ def _footage_input_path(dm_done: dict[str, Any], label: str) -> Path:
 
 def _report_output_root(dm_done: dict[str, Any], label: str) -> Path:
     project_roots = dm_done.get("replica_project_roots", {})
+    # New runs keep each card's reports in its own folder so the next card
+    # cannot overwrite them; legacy completion records keep the shared folder.
+    relpath = Path(str(dm_done.get("card_report_relpath") or Path("00_Master") / "reports"))
     if isinstance(project_roots, dict) and project_roots.get(label):
-        return Path(str(project_roots[label])) / "00_Master" / "reports"
-    return _footage_input_path(dm_done, label).parents[1] / "00_Master" / "reports"
+        return Path(str(project_roots[label])) / relpath
+    return _footage_input_path(dm_done, label).parents[1] / relpath
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from contextlib import contextmanager
 from pathlib import Path
@@ -40,8 +41,12 @@ class ConsoleRegistry:
         return payload
 
     def save(self, payload: dict[str, Any]) -> None:
+        # Readers poll without the lock; replace atomically so they never see a
+        # half-written registry.
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        temporary = self.path.with_suffix(self.path.suffix + f".{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        temporary.replace(self.path)
 
     def add_project(self, project: ConsoleProject) -> None:
         with self._locked():

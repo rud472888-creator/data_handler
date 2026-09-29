@@ -30,6 +30,14 @@ class PlanInput(BaseModel):
     camera_unit: str = Field(min_length=1, max_length=30, pattern=r'^[\w-]+$')
 
 
+def _mounted_volumes() -> list[str]:
+    # /Volumes is macOS-only and a disk can vanish mid-scan; never fail the chat.
+    try:
+        return [str(p) for p in Path('/Volumes').iterdir() if p.is_dir()]
+    except OSError:
+        return []
+
+
 class AgentService:
     def __init__(self, root: Path, config: dict, *, starter=None):
         self.root, self.config = root, config
@@ -50,7 +58,7 @@ class AgentService:
         return {'projects': [{'id': p['id'], 'name': p['name'],
                              'source_paths': p.get('source_paths', []),
                              'replica_roots': p.get('replica_roots', [])} for p in projects],
-                'mounted_volumes': [str(p) for p in Path('/Volumes').iterdir() if p.is_dir()],
+                'mounted_volumes': _mounted_volumes(),
                 'today': date.today().isoformat(), 'blackmagician_sessions': sessions}
 
     def safe_path(self, value: str) -> Path:

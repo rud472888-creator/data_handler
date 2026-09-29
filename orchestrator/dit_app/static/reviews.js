@@ -36,9 +36,30 @@
     if (activePhase) [...container.querySelectorAll('details')].find(d => d.dataset.phase === activePhase)?.querySelector('summary')?.focus({preventScroll:true});
     el('reviewAnnouncement').textContent = reviews.map(r => `${r.title}: ${status(r)}`).join(', ');
   }
+  // The card list only carries review summaries. Load findings for the selected
+  // card when its summary changes, and keep the last details between polls.
+  let detail = {key: '', reviews: null}, loading = 0;
+  const summaryKey = card => JSON.stringify([card?.run_id, (card?.agent_reviews || []).map(r => [r.phase, r.state, r.status, r.revision, r.finished_at, r.finding_count])]);
+  async function show(card) {
+    const key = summaryKey(card);
+    if (!card || !(card.agent_reviews || []).some(r => r.finding_count)) { detail = {key, reviews: null}; render(card); return; }
+    if (detail.key === key) { render({...card, agent_reviews: detail.reviews}); return; }
+    render(detail.key && JSON.parse(detail.key)[0] === card.run_id ? {...card, agent_reviews: detail.reviews} : card);
+    const ticket = ++loading;
+    try {
+      const response = await fetch(`/api/library/cards/${encodeURIComponent(card.run_id)}/reviews`);
+      if (!response.ok) throw new Error('검토 항목을 불러오지 못했습니다.');
+      const data = await response.json();
+      if (ticket !== loading) return;
+      detail = {key, reviews: data.agent_reviews};
+      render({...card, agent_reviews: data.agent_reviews});
+    } catch (error) {
+      if (ticket === loading) { el('reviewError').textContent = error.message; el('reviewError').hidden = false; }
+    }
+  }
   document.addEventListener('dit-card-selected', event => {
     if (selected?.run_id !== event.detail.card?.run_id) { el('reviewError').hidden = true; }
-    render(event.detail.card);
+    show(event.detail.card);
   });
   el('reviewRetry').onclick = async () => {
     if (!selected || sending) return;
@@ -65,5 +86,5 @@
     const phase = event.target.closest('[data-jump-review]')?.dataset.jumpReview;
     if (phase) el(`review-${phase}`)?.scrollIntoView({block:'nearest'});
   };
-  render(state.cards.find(c => c.run_id === state.selected));
+  show(state.cards.find(c => c.run_id === state.selected));
 })();
