@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from orchestrator import datamanager_worker, run_state
-from orchestrator.spec import RunSpec
+from orchestrator import datamanager_worker, run_state, stages
+from orchestrator.spec import RUN_MODE_DATAMANAGER, RunSpec
 
 
 def _patch_state(monkeypatch, tmp_path: Path) -> list[tuple[str, str, tuple[str, ...]]]:
@@ -12,9 +12,12 @@ def _patch_state(monkeypatch, tmp_path: Path) -> list[tuple[str, str, tuple[str,
     monkeypatch.setattr(datamanager_worker, "events_dir", run_state.events_dir)
     monkeypatch.setattr(datamanager_worker, "load_spec", run_state.load_spec)
     monkeypatch.setattr(datamanager_worker, "update_state", run_state.update_state)
+    monkeypatch.setattr(stages, "run_dir", run_state.run_dir)
+    monkeypatch.setattr(stages, "events_dir", run_state.events_dir)
+    monkeypatch.setattr(stages, "update_state", run_state.update_state)
     starts: list[tuple[str, str, tuple[str, ...]]] = []
     monkeypatch.setattr(
-        datamanager_worker,
+        stages,
         "spawn_python_module",
         lambda run_id, module, *args: starts.append((run_id, module, args)) or 1234,
         raising=False,
@@ -88,6 +91,32 @@ def test_datamanager_worker_uses_nested_footage_run_name(monkeypatch, tmp_path: 
     }
     assert (path1 / "Project/01_Footage/260528/A-cam/R#1/source-path-1/A001_C001.braw").is_file()
     assert (path2 / "Project/01_Footage/260528/A-cam/R#1/source-path-1/A001_C001.braw").is_file()
+
+
+def test_datamanager_mode_does_not_start_datahelper(monkeypatch, tmp_path: Path) -> None:
+    starts = _patch_state(monkeypatch, tmp_path)
+    source = tmp_path / "source"
+    path1 = tmp_path / "path1"
+    path2 = tmp_path / "path2"
+    source.mkdir()
+    path1.mkdir()
+    path2.mkdir()
+    (source / "A001_C001.braw").write_bytes(b"clip")
+    run_state.save_spec(
+        RunSpec(
+            run_id="run-datamanager",
+            project_name="Project",
+            source_path=source,
+            replica_roots=(path1, path2),
+            run_mode=RUN_MODE_DATAMANAGER,
+        )
+    )
+
+    payload = datamanager_worker.run_datamanager("run-datamanager")
+
+    assert payload["status"] == "completed"
+    assert starts == []
+    assert not (run_state.events_dir("run-datamanager") / "datahelper.started.json").exists()
 
 
 def test_datamanager_worker_accepts_multiple_sources(monkeypatch, tmp_path: Path) -> None:

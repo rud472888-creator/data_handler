@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -10,6 +11,8 @@ from orchestrator.jsonio import read_json, write_json
 from orchestrator.paths import DATA_HELPER_ROOT
 from orchestrator.run_state import events_dir, load_spec, run_dir, update_state, utc_now
 from orchestrator.web.progress import write_progress
+
+FRAMEPROOF_TOOL_DIRS = (Path("/opt/homebrew/bin"), Path("/usr/local/bin"))
 
 
 def run_datahelper(run_id: str) -> dict[str, Any]:
@@ -55,14 +58,30 @@ def run_datahelper(run_id: str) -> dict[str, Any]:
     replica_count = len(labels)
     results: list[dict[str, Any]] = []
     for label in labels:
-        results.append(
-            _run_one(
+        try:
+            result = _run_one(
                 label=label,
                 input_path=_footage_input_path(dm_done, label),
                 output_root=_report_output_root(dm_done, label),
                 project_name=f"{spec.project_name} {label} replica",
             )
-        )
+        except Exception as exc:
+            # Failed tool launches must also publish completion evidence so the
+            # operator gets a diagnosis instead of an indefinitely pending job.
+            result = {'label': label, 'status': 'failed', 'exit_code': 1,
+                      'input_path': str(_footage_input_path(dm_done, label)),
+                      'stdout': '', 'stderr': f'{type(exc).__name__}: {exc}',
+                      'missing_artifacts': ['pdf', 'csv', 'json']}
+        results.append(result)
+        # Project report paths are reused by the next card. Preserve this job's
+        # structured evidence before exposing its completion event to reviewers.
+        report = results[-1]
+        saved = run_dir(run_id) / 'agent/report-inputs' / f'{label}.json'
+        report['review_json_path'] = str(saved)
+        try:
+            write_json(saved, read_json(Path(report['json_path'])))
+        except (OSError, ValueError, KeyError):
+            report['review_snapshot_error'] = 'structured_report_unavailable'
         write_progress(
             run_dir(run_id),
             {
@@ -231,11 +250,33 @@ def build_frameproof_command(
         "1",
         "--project-name",
         project_name,
+        "--ffmpeg-path",
+        _resolve_frameproof_tool("ffmpeg"),
+        "--ffprobe-path",
+        _resolve_frameproof_tool("ffprobe"),
+        "--mediainfo-path",
+        _resolve_frameproof_tool("mediainfo"),
     ]
-    braw_adapter = DATA_HELPER_ROOT / "tools" / "braw_adapter"
-    if braw_adapter.exists():
-        command.extend(["--braw-adapter-path", str(braw_adapter)])
+    for flag, name in (
+        ("--braw-adapter-path", "braw_adapter"),
+        ("--r3d-adapter-path", "r3d_adapter"),
+        ("--arri-art-cmd-path", "art-cmd"),
+    ):
+        adapter = DATA_HELPER_ROOT / "tools" / name
+        if adapter.is_file():
+            command.extend([flag, str(adapter)])
     return command
+
+
+def _resolve_frameproof_tool(name: str) -> str:
+    resolved = shutil.which(name)
+    if resolved:
+        return resolved
+    for directory in FRAMEPROOF_TOOL_DIRS:
+        candidate = directory / name
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return name
 
 
 def _prepend_pythonpath(path: str, current: str | None) -> str:

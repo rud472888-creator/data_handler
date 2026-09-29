@@ -34,6 +34,7 @@ class ConsoleRunRecord:
     source_path: str
     created_at: str
     source_paths: tuple[str, ...] = ()
+    run_mode: str = "workflow"
 
     def to_payload(self) -> dict[str, Any]:
         payload = asdict(self)

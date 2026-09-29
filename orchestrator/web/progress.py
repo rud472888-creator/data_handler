@@ -39,6 +39,14 @@ def load_run_progress(run_dir: Path) -> dict[str, Any]:
 
 
 def list_artifacts(run_dir: Path) -> list[dict[str, str]]:
+    return [
+        artifact
+        for artifact in list_declared_artifacts(run_dir)
+        if _artifact_file_ready(Path(artifact["path"]))
+    ]
+
+
+def list_declared_artifacts(run_dir: Path) -> list[dict[str, str]]:
     artifacts: list[dict[str, str]] = []
     final_report = run_dir / "final-report.md"
     if final_report.is_file():
@@ -54,7 +62,7 @@ def list_artifacts(run_dir: Path) -> list[dict[str, str]]:
             )
             for key, kind in (("pdf_path", "pdf"), ("csv_path", "csv"), ("json_path", "json")):
                 path = Path(str(report.get(key, "")))
-                if path.is_file() and path.stat().st_size > 0:
+                if str(path) not in {"", "."}:
                     artifacts.append(
                         {"name": f"{artifact_label} {kind}", "path": str(path), "kind": kind}
                     )
@@ -64,7 +72,7 @@ def list_artifacts(run_dir: Path) -> list[dict[str, str]]:
         done = read_json(datamanager_done)
         for report_type, path_value in done.get("reports", {}).items():
             path = Path(str(path_value))
-            if path.is_file() and path.stat().st_size > 0:
+            if str(path) not in {"", "."}:
                 artifacts.append(
                     {
                         "name": str(report_type).replace("_", " "),
@@ -73,6 +81,10 @@ def list_artifacts(run_dir: Path) -> list[dict[str, str]]:
                     }
                 )
     return artifacts
+
+
+def _artifact_file_ready(path: Path) -> bool:
+    return path.is_file() and path.stat().st_size > 0
 
 
 def _iter_datahelper_reports(reports: Any) -> list[dict[str, Any]]:
@@ -102,11 +114,153 @@ def _legacy_report_path(value: Any) -> Any:
 
 
 def _with_run_context(run_dir: Path, progress: dict[str, Any]) -> dict[str, Any]:
-    return _with_phase_context(run_dir, _with_observed_copy_progress(run_dir, progress))
+    payload = _with_phase_context(
+        run_dir,
+        _with_observed_copy_progress(run_dir, _with_request_context(run_dir, progress)),
+    )
+    quality = _quality_summary(run_dir)
+    failure = _failure_summary(run_dir)
+    if quality:
+        payload["quality"] = quality
+        if quality["status"] == "needs_review":
+            payload["process_status"] = payload.get("status")
+            payload["status"] = "review-needed"
+            payload["activity_state"] = "needs_review"
+            payload["phase_label"] = "Backup complete, review needed"
+            payload["phase_detail"] = _quality_detail(quality)
+            payload["overall_progress"] = {
+                **payload.get("overall_progress", {}),
+                "percent": 100,
+                "title": payload["phase_label"],
+                "subtitle": payload["phase_detail"],
+            }
+        elif quality["status"] == "failed":
+            payload["process_status"] = payload.get("status")
+            payload["status"] = "failed"
+            payload["activity_state"] = "failed"
+            payload["phase_label"] = "Media inspection failed"
+            payload["phase_detail"] = _quality_detail(quality)
+    if failure:
+        payload["failure"] = failure
+        if str(payload.get("status", "")).lower() in {"failed", "error"}:
+            payload["phase_detail"] = _failure_detail(failure)
+            if isinstance(payload.get("overall_progress"), dict):
+                payload["overall_progress"] = {
+                    **payload["overall_progress"],
+                    "subtitle": payload["phase_detail"],
+                }
+    return payload
+
+
+def _quality_summary(run_dir: Path) -> dict[str, Any] | None:
+    done_path = run_dir / "events" / "datahelper.done.json"
+    if not done_path.exists():
+        return None
+    done = read_json(done_path)
+    reports = _iter_datahelper_reports(done.get("reports", []))
+    if not reports:
+        return None
+
+    observed_statuses: set[str] = set()
+    counters: dict[str, int] = {
+        "total_clips": 0,
+        "success_count": 0,
+        "partial_success_count": 0,
+        "probe_failed_count": 0,
+        "decode_failed_count": 0,
+        "skipped_count": 0,
+    }
+    for report in reports:
+        report_status = str(report.get("status", "")).strip().lower()
+        if report_status:
+            observed_statuses.add(report_status)
+        stdout_values = _stdout_values(report.get("stdout"))
+        stdout_status = str(stdout_values.get("status", "")).strip().lower()
+        if stdout_status:
+            observed_statuses.add(stdout_status)
+        for key in counters:
+            value = _int_from_text(stdout_values.get(key))
+            if value is not None:
+                counters[key] = max(counters[key], value)
+
+    issue_count = (
+        counters["partial_success_count"]
+        + counters["probe_failed_count"]
+        + counters["decode_failed_count"]
+    )
+    if "failed" in observed_statuses or "error" in observed_statuses:
+        status = "failed"
+    elif issue_count > 0 or "partial_success" in observed_statuses:
+        status = "needs_review"
+    else:
+        status = "passed"
+    return {"status": status, "issue_count": issue_count, **counters}
+
+
+def _stdout_values(value: Any) -> dict[str, str]:
+    if not isinstance(value, str):
+        return {}
+    parsed: dict[str, str] = {}
+    for line in value.splitlines():
+        key, separator, raw_value = line.partition(":")
+        if separator:
+            parsed[key.strip()] = raw_value.strip()
+    return parsed
+
+
+def _int_from_text(value: Any) -> int | None:
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _quality_detail(quality: dict[str, Any]) -> str:
+    issue_count = int(quality.get("issue_count", 0))
+    total_clips = int(quality.get("total_clips", 0))
+    if quality.get("status") == "failed":
+        return "Media inspection did not complete. Review the generated log before handoff."
+    if total_clips:
+        return f"{issue_count} of {total_clips} clips need review; report files were generated."
+    return f"{issue_count} clips need review; report files were generated."
+
+
+def _failure_summary(run_dir: Path) -> dict[str, Any] | None:
+    done_path = run_dir / "events" / "datamanager.done.json"
+    if not done_path.exists():
+        return None
+    done = read_json(done_path)
+    failed_files = [str(value) for value in done.get("failed_files", []) if str(value)]
+    if not failed_files and str(done.get("status", "")).lower() not in {"failed", "error"}:
+        return None
+    return {
+        "failed_files": failed_files,
+        "failed_count": len(failed_files),
+        "job_state": str(done.get("job_state", done.get("status", "failed"))),
+    }
+
+
+def _failure_detail(failure: dict[str, Any]) -> str:
+    failed_files = failure.get("failed_files", [])
+    if failed_files:
+        return f"{len(failed_files)} file failed: {failed_files[0]}"
+    return "The backup worker failed before a safe handoff was recorded."
+
+
+def _with_request_context(run_dir: Path, progress: dict[str, Any]) -> dict[str, Any]:
+    request_path = run_dir / "request.json"
+    if not request_path.exists():
+        return progress
+    request = read_json(request_path)
+    run_mode = request.get("run_mode")
+    if run_mode is None:
+        return progress
+    return {"run_mode": str(run_mode), **progress}
 
 
 def _with_observed_copy_progress(run_dir: Path, progress: dict[str, Any]) -> dict[str, Any]:
-    if progress.get("stage") not in {"copy", "datamanager", "done"}:
+    stage = str(progress.get("stage", ""))
+    if stage not in {"copy", "datamanager", "copy-checksum", "done"}:
         return progress
     request_path = run_dir / "request.json"
     if not request_path.exists():
@@ -146,16 +300,34 @@ def _with_observed_copy_progress(run_dir: Path, progress: dict[str, Any]) -> dic
         if file_active:
             active_files += 1
 
-    observed: dict[str, Any] = {
-        "current": observed_bytes,
-        "total": total_bytes,
-        "percent": round((observed_bytes / total_bytes) * 100) if total_bytes > 0 else 0,
+    copy_progress: dict[str, Any] = {
+        "available": True,
+        "unit": "bytes",
+        "bytes_observed": observed_bytes,
+        "bytes_total": total_bytes,
+        "byte_percent": round((observed_bytes / total_bytes) * 100) if total_bytes > 0 else 0,
         "copied_files": copied_files,
         "total_files": len(source_files),
         "file_count": progress.get("file_count") or len(source_files),
         "replica_count": len(spec.replica_roots),
         "active_files": active_files,
     }
+    observed: dict[str, Any] = {
+        "copy_progress": copy_progress,
+        "copied_files": copied_files,
+        "total_files": len(source_files),
+        "file_count": progress.get("file_count") or len(source_files),
+        "replica_count": len(spec.replica_roots),
+        "active_files": active_files,
+    }
+    if stage in {"copy", "datamanager", "copy-checksum"}:
+        observed.update(
+            {
+                "current": observed_bytes,
+                "total": total_bytes,
+                "percent": copy_progress["byte_percent"],
+            }
+        )
     return {**progress, **observed}
 
 
@@ -233,12 +405,27 @@ def _with_phase_context(run_dir: Path, progress: dict[str, Any]) -> dict[str, An
             "activity_state": _activity_state(normalized_status),
         }
 
-    return {
+    payload = {
         **progress,
         **context,
+        "datamanager_done": datamanager_done,
+        "datahelper_started": datahelper_started,
+        "datahelper_done": datahelper_done,
         "last_progress_at": progress.get("updated_at"),
         "progress_observed": _progress_observed(progress),
     }
+    copy_progress = _copy_progress(payload)
+    report_progress = _report_progress_payload(payload)
+    clip_progress = _clip_progress(payload)
+    payload.update(
+        {
+            "copy_progress": copy_progress,
+            "report_progress": report_progress,
+            "clip_progress": clip_progress,
+        }
+    )
+    payload["overall_progress"] = _overall_progress(payload, copy_progress, report_progress)
+    return payload
 
 
 def _datamanager_context(
@@ -264,7 +451,9 @@ def _datamanager_context(
             "activity_state": "waiting",
         }
     if status in {"completed", "done", "warn", "review-needed"} or datamanager_done:
-        if datahelper_started:
+        if progress.get("run_mode") == "datamanager" and not datahelper_started:
+            detail = "DataManager-only copy/checksum finished; DataHandler has not been started for this run."
+        elif datahelper_started:
             detail = "DataManager copy/checksum finished; DataHelper report generation has started."
         else:
             detail = "DataManager copy/checksum finished; waiting for DataHelper report generation."
@@ -357,6 +546,115 @@ def _report_detail(progress: dict[str, Any]) -> str:
     return "; ".join(parts) + "."
 
 
+def _copy_progress(progress: dict[str, Any]) -> dict[str, Any]:
+    raw = progress.get("copy_progress")
+    if isinstance(raw, dict):
+        payload = dict(raw)
+        payload.setdefault("available", True)
+        payload.setdefault("unit", "bytes")
+        return payload
+    if str(progress.get("stage", "")) not in {"copy", "datamanager", "copy-checksum"}:
+        return {"available": False, "unit": "bytes"}
+    current = _int_value(progress.get("current"))
+    total = _int_value(progress.get("total"))
+    percent = _int_value(progress.get("percent"))
+    if percent is None and current is not None and total and total > 0:
+        percent = round((current / total) * 100)
+    payload = {
+        "available": any(
+            value is not None
+            for value in (
+                current,
+                total,
+                percent,
+                _int_value(progress.get("copied_files")),
+                _int_value(progress.get("total_files") or progress.get("file_count")),
+            )
+        ),
+        "unit": "bytes",
+        "bytes_observed": current,
+        "bytes_total": total,
+        "byte_percent": percent,
+        "copied_files": _int_value(progress.get("copied_files")),
+        "total_files": _int_value(progress.get("total_files") or progress.get("file_count")),
+        "file_count": _int_value(progress.get("file_count") or progress.get("total_files")),
+        "replica_count": _int_value(progress.get("replica_count")),
+        "active_files": _int_value(progress.get("active_files")),
+    }
+    return payload
+
+
+def _report_progress_payload(progress: dict[str, Any]) -> dict[str, Any]:
+    raw = progress.get("report_progress")
+    if isinstance(raw, dict):
+        payload = dict(raw)
+        payload.setdefault("available", True)
+        return payload
+    stage = str(progress.get("stage", ""))
+    completed = _int_value(progress.get("report_completed"))
+    total = _int_value(progress.get("report_total"))
+    if stage in {"datahelper", "reports"}:
+        if completed is None:
+            completed = _int_value(progress.get("completed"))
+        if total is None:
+            total = _int_value(progress.get("total"))
+    percent = round((completed / total) * 100) if completed is not None and total and total > 0 else None
+    artifact_count = _int_value(progress.get("report_count"))
+    payload = {
+        "available": any(value is not None for value in (completed, total, artifact_count)),
+        "completed": completed,
+        "total": total,
+        "percent": percent,
+        "artifact_count": artifact_count,
+        "artifacts_ready": progress.get("artifacts_ready") if isinstance(progress.get("artifacts_ready"), bool) else None,
+    }
+    return payload
+
+
+def _clip_progress(progress: dict[str, Any]) -> dict[str, Any]:
+    raw = progress.get("clip_progress")
+    if isinstance(raw, dict):
+        payload = dict(raw)
+        payload.setdefault("available", True)
+        return payload
+    return {
+        "available": False,
+        "title": "No active clip-level telemetry",
+        "subtitle": "Current file or clip-level progress has not been reported for this run.",
+        "percent": None,
+    }
+
+
+def _overall_progress(
+    progress: dict[str, Any],
+    copy_progress: dict[str, Any],
+    report_progress: dict[str, Any],
+) -> dict[str, Any]:
+    stage = str(progress.get("stage", ""))
+    status = str(progress.get("status", "")).lower()
+    title = str(progress.get("phase_label") or "Pipeline status")
+    subtitle = str(progress.get("phase_detail") or "Waiting for progress telemetry.")
+    if status in {"completed", "done"} and stage == "done":
+        return {"kind": "terminal", "percent": 100, "title": title, "subtitle": subtitle}
+    if stage in {"datahelper", "reports"}:
+        return {
+            "kind": "report_jobs",
+            "percent": report_progress.get("percent"),
+            "title": title,
+            "subtitle": subtitle,
+        }
+    if stage in {"copy", "datamanager", "copy-checksum"}:
+        return {
+            "kind": "copy_bytes",
+            "percent": copy_progress.get("byte_percent"),
+            "title": title,
+            "subtitle": subtitle,
+        }
+    if status in {"completed", "done"}:
+        return {"kind": "terminal", "percent": 100, "title": title, "subtitle": subtitle}
+    return {"kind": "pipeline_state", "percent": None, "title": title, "subtitle": subtitle}
+
+
 def _terminal_detail(progress: dict[str, Any], fallback: str) -> str:
     if str(progress.get("status", "")).lower() in {"warn", "review-needed"}:
         return fallback + " Review generated artifacts before handoff."
@@ -388,7 +686,12 @@ def _progress_observed(progress: dict[str, Any]) -> bool:
     current = _int_value(progress.get("current"))
     completed = _int_value(progress.get("completed") or progress.get("report_completed"))
     copied = _int_value(progress.get("copied_files"))
-    return any(value is not None and value > 0 for value in (current, completed, copied))
+    report_count = _int_value(progress.get("report_count"))
+    copy_progress = progress.get("copy_progress")
+    if isinstance(copy_progress, dict):
+        current = _int_value(copy_progress.get("bytes_observed"))
+        copied = _int_value(copy_progress.get("copied_files"))
+    return any(value is not None and value > 0 for value in (current, completed, copied, report_count))
 
 
 def _int_value(value: Any) -> int | None:

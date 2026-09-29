@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from orchestrator.spec import RunSpec, SpecError
+from orchestrator.spec import RUN_MODE_DATAMANAGER, RUN_MODE_WORKFLOW, RunSpec, SpecError
 
 
 def _paths(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -46,6 +46,51 @@ def test_run_spec_validation_accepts_multiple_sources(tmp_path: Path) -> None:
     spec.validate()
     loaded = RunSpec.from_payload(spec.to_payload())
     assert loaded.source_paths == (source, source2)
+
+
+def test_run_spec_serializes_default_workflow_mode(tmp_path: Path) -> None:
+    source, path1, path2 = _paths(tmp_path)
+
+    spec = RunSpec(
+        run_id="run-test",
+        project_name="Project",
+        source_path=source,
+        replica_roots=(path1, path2),
+    )
+
+    payload = spec.to_payload()
+    assert payload["run_mode"] == RUN_MODE_WORKFLOW
+    assert RunSpec.from_payload(payload).run_mode == RUN_MODE_WORKFLOW
+
+
+def test_run_spec_accepts_datamanager_mode(tmp_path: Path) -> None:
+    source, path1, path2 = _paths(tmp_path)
+
+    spec = RunSpec(
+        run_id="run-test",
+        project_name="Project",
+        source_path=source,
+        replica_roots=(path1, path2),
+        run_mode=RUN_MODE_DATAMANAGER,
+    )
+
+    spec.validate()
+    assert RunSpec.from_payload(spec.to_payload()).run_mode == RUN_MODE_DATAMANAGER
+
+
+def test_run_spec_rejects_unknown_mode(tmp_path: Path) -> None:
+    source, path1, path2 = _paths(tmp_path)
+
+    spec = RunSpec(
+        run_id="run-test",
+        project_name="Project",
+        source_path=source,
+        replica_roots=(path1, path2),
+        run_mode="copy-only",
+    )
+
+    with pytest.raises(SpecError, match="unsupported run_mode"):
+        spec.validate()
 
 
 def test_run_spec_rejects_path_separator_in_project_name(tmp_path: Path) -> None:

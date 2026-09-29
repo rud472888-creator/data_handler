@@ -33,6 +33,58 @@ def test_frameproof_command_targets_replica_artifacts(tmp_path: Path) -> None:
     assert command[command.index("--middle-count") + 1] == "1"
 
 
+def test_frameproof_command_finds_tools_outside_restricted_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    tool_dir = tmp_path / "homebrew" / "bin"
+    tool_dir.mkdir(parents=True)
+    for name in ("ffmpeg", "ffprobe", "mediainfo"):
+        tool = tool_dir / name
+        tool.write_text("#!/bin/sh\n", encoding="utf-8")
+        tool.chmod(0o755)
+    monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+    monkeypatch.setattr(datahelper_worker, "FRAMEPROOF_TOOL_DIRS", (tool_dir,))
+
+    command = build_frameproof_command(
+        input_path=tmp_path / "input",
+        pdf_path=tmp_path / "report.pdf",
+        csv_path=tmp_path / "report.csv",
+        json_path=tmp_path / "report.json",
+        project_name="Project path1 replica",
+    )
+
+    assert command[command.index("--ffmpeg-path") + 1] == str(tool_dir / "ffmpeg")
+    assert command[command.index("--ffprobe-path") + 1] == str(tool_dir / "ffprobe")
+    assert command[command.index("--mediainfo-path") + 1] == str(tool_dir / "mediainfo")
+
+
+def test_frameproof_command_configures_all_bundled_raw_adapters(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    helper_root = tmp_path / "DataHelper"
+    tools_dir = helper_root / "tools"
+    tools_dir.mkdir(parents=True)
+    for name in ("braw_adapter", "r3d_adapter", "art-cmd"):
+        adapter = tools_dir / name
+        adapter.write_text("#!/bin/sh\n", encoding="utf-8")
+        adapter.chmod(0o755)
+    monkeypatch.setattr(datahelper_worker, "DATA_HELPER_ROOT", helper_root)
+
+    command = build_frameproof_command(
+        input_path=tmp_path / "input",
+        pdf_path=tmp_path / "report.pdf",
+        csv_path=tmp_path / "report.csv",
+        json_path=tmp_path / "report.json",
+        project_name="Project path1 replica",
+    )
+
+    assert command[command.index("--braw-adapter-path") + 1] == str(tools_dir / "braw_adapter")
+    assert command[command.index("--r3d-adapter-path") + 1] == str(tools_dir / "r3d_adapter")
+    assert command[command.index("--arri-art-cmd-path") + 1] == str(tools_dir / "art-cmd")
+
+
 def test_footage_input_path_prefers_datamanager_run_folder(tmp_path: Path) -> None:
     dm_done = {
         "replica_project_roots": {"path1": str(tmp_path / "path1" / "Project")},

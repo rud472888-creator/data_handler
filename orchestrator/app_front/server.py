@@ -14,15 +14,16 @@ from orchestrator import paths
 from orchestrator.disks import DiskUnmountError, MOUNT_ROOT, list_mounted_disks, unmount_disk
 from orchestrator.app_front.settings import AppSettings, SettingsError, SettingsStore
 from orchestrator.cli import start_run
+from orchestrator.media_preflight import MediaDependencyPreflightError
 from orchestrator.spec import SpecError
-from orchestrator.web.progress import list_artifacts, load_run_progress
+from orchestrator.web.progress import load_run_progress
 from orchestrator.web.registry import ConsoleRegistry, create_project
 from orchestrator.web.server import (
     DEFAULT_PRESET_DIRS,
     RollPreviewPayload,
     RunCreatePayload,
     ProjectCreatePayload,
-    _artifact_payload,
+    _artifact_payloads,
     _find_project,
     _path_within,
     _progress_with_steps,
@@ -35,7 +36,9 @@ from orchestrator.web.server import (
     _validated_source_path,
     _validated_source_paths,
     _runtime_payload,
+    _startable_run_mode,
 )
+from orchestrator.stages import datahelper_start_status, start_datahelper_stage
 from orchestrator.web.sources import list_source_candidates
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -58,6 +61,7 @@ def create_app(
     source_roots: tuple[Path, ...] | None = None,
     destination_roots: tuple[Path, ...] | None = None,
     runs_root: Path | None = None,
+    flat_card_layout: bool = False,
 ) -> FastAPI:
     active_settings_store = settings_store or SettingsStore()
     active_disk_root = disk_root or MOUNT_ROOT
@@ -149,6 +153,7 @@ def create_app(
                 payload.shoot_date,
                 payload.camera_unit,
                 replica_roots=replica_roots,
+                flat_card_layout=flat_card_layout,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=f"project not found: {payload.project_id}") from exc
@@ -162,7 +167,7 @@ def create_app(
             "roll": preview["roll"],
             "footage_run_name": preview["footage_run_name"],
             "replica_destinations": [
-                str(Path(str(root)) / "01_Footage" / preview["footage_run_name"])
+                str(Path(str(root)) / ("001_Footage" if flat_card_layout else "01_Footage") / preview["footage_run_name"])
                 for root in replica_project_roots
             ],
         }
@@ -171,7 +176,12 @@ def create_app(
     def create_run(payload: RunCreatePayload) -> dict[str, str]:
         registry_payload = registry.load()
         project = _find_project(registry_payload, payload.project_id)
+        run_mode = _startable_run_mode(payload.run_mode)
         sources = _validated_source_paths(payload, active_source_roots)
+        if project.get("removed_at"):
+            raise HTTPException(409, "목록에서 제거된 프로젝트입니다.")
+        if flat_card_layout and len(sources) != 1:
+            raise HTTPException(400, "카드는 원본 폴더 하나씩 가져와 주세요.")
         replica_roots = _selected_replica_roots(project, payload.replica_roots)
         _validate_replica_roots(replica_roots, sources)
         run_id = f"run-{uuid4().hex[:12]}"
@@ -183,6 +193,8 @@ def create_app(
             source_path=str(sources[0]),
             source_paths=tuple(str(source) for source in sources),
             replica_roots=replica_roots,
+            run_mode=run_mode,
+            flat_card_layout=flat_card_layout,
         )
         try:
             start_run(
@@ -191,13 +203,39 @@ def create_app(
                 project_name=str(project["name"]),
                 profile=payload.profile,
                 run_id=run_id,
-                footage_run_name=f"{payload.shoot_date}/{payload.camera_unit}/{record.roll}",
+                footage_run_name=record.roll if flat_card_layout else f"{payload.shoot_date}/{payload.camera_unit}/{record.roll}",
+                run_mode=run_mode,
+                **({"flat_card_layout": True} if flat_card_layout else {}),
             )
+        except MediaDependencyPreflightError as exc:
+            registry.mark_run_failed(run_id, str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             registry.mark_run_failed(run_id, str(exc))
             raise HTTPException(status_code=500, detail=f"failed to start run: {exc}") from exc
         registry.mark_run_started(run_id)
         return {"run_id": run_id, "roll": record.roll}
+
+    @app.post("/api/runs/{run_id}/datahandler")
+    def start_datahandler(run_id: str) -> dict[str, Any]:
+        payload = registry.load()
+        if not any(isinstance(run, dict) and run.get("run_id") == run_id for run in payload.get("runs", [])):
+            raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
+        _safe_run_dir(active_runs_root, run_id)
+        status = datahelper_start_status(run_id)
+        if status["datahelper_done"]:
+            raise HTTPException(status_code=409, detail="DataHandler has already completed for this run")
+        if status["datahelper_started"]:
+            raise HTTPException(status_code=409, detail="DataHandler has already started for this run")
+        if not status["ready"]:
+            raise HTTPException(status_code=400, detail=status["reason"])
+        try:
+            pid = start_datahelper_stage(run_id, trigger="datahandler_api")
+        except MediaDependencyPreflightError as exc:
+            registry.mark_run_failed(run_id, str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        registry.mark_run_started(run_id)
+        return {"run_id": run_id, "stage": "datahelper", "status": "started", "pid": pid}
 
     @app.get("/api/runs/{run_id}")
     def run_detail(run_id: str) -> dict[str, Any]:
@@ -212,7 +250,7 @@ def create_app(
                     "run": run,
                     "project": project,
                     "progress": progress,
-                    "artifacts": [_artifact_payload(run_id, artifact) for artifact in _safe_artifacts(run_dir)],
+                    "artifacts": _artifact_payloads(run_id, run_dir),
                 }
         raise HTTPException(status_code=404, detail=f"run not found: {run_id}")
 
@@ -225,7 +263,7 @@ def create_app(
     @app.get("/api/runs/{run_id}/artifacts")
     def run_artifacts(run_id: str) -> dict[str, Any]:
         run_dir = _safe_run_dir(active_runs_root, run_id)
-        return {"artifacts": [_artifact_payload(run_id, artifact) for artifact in _safe_artifacts(run_dir)]}
+        return {"artifacts": _artifact_payloads(run_id, run_dir)}
 
     @app.get("/artifacts/{run_id}/{artifact_name}", include_in_schema=False)
     def artifact_file(run_id: str, artifact_name: str) -> FileResponse:
