@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -131,14 +132,21 @@ def _run(run_id: str) -> dict[str, Any]:
     report_root = replica_project_roots["path1"]
     report_paths = _report_paths(report_root, reports)
     replicas_complete = _replicas_complete(files, replica_project_roots, data_manager_path_ids)
+    footage_roots = {
+        label: _footage_root(replica_project_roots[label], files, path_id)
+        for label, path_id in data_manager_path_ids.items()
+    }
+    card_report_relpath = _card_report_relpath(spec.footage_run_name, footage_roots["path1"], run_id)
+    # The engine writes one project-wide checksum.pdf/manifest.json that the next
+    # card overwrites. Keep this card's own copies on every backup and in the run.
+    manifest = {"job_id": job.job_id, "files": [_manifest_file_payload(file) for file in files]}
+    write_json(run_dir(run_id) / 'blackmagician/manifest.json', manifest)
+    report_paths.update(_write_card_reports(
+        replica_project_roots, card_report_relpath, manifest,
+        job_id=job.job_id, project_name=completed_job.project_name, files=files,
+        expected_replica_ids=completed_job.replica_path_ids, work_dir=run_dir(run_id),
+    ))
     manifest_ready = Path(report_paths.get("manifest_json", "")).is_file()
-    if manifest_ready:
-        # The engine's project manifest is replaced by the next card. Preserve the
-        # completed job's file-level evidence inside its durable run directory.
-        from orchestrator.jsonio import read_json
-        manifest = read_json(Path(report_paths['manifest_json']))
-        if manifest.get('job_id') == job.job_id:
-            write_json(run_dir(run_id) / 'blackmagician/manifest.json', manifest)
     checksum_ready = Path(report_paths.get("checksum_pdf", "")).is_file()
     status = "completed" if completed_job.state == "COMPLETED" and replicas_complete else "warn"
     if completed_job.state == "FAILED":
@@ -152,10 +160,8 @@ def _run(run_id: str) -> dict[str, Any]:
         "replica_project_roots": {
             label: str(root) for label, root in replica_project_roots.items()
         },
-        "replica_footage_roots": {
-            label: str(_footage_root(replica_project_roots[label], files, path_id))
-            for label, path_id in data_manager_path_ids.items()
-        },
+        "replica_footage_roots": {label: str(root) for label, root in footage_roots.items()},
+        "card_report_relpath": str(card_report_relpath),
         "replicas_complete": replicas_complete,
         "manifest_ready": manifest_ready,
         "checksum_ready": checksum_ready,
@@ -170,6 +176,64 @@ def _run(run_id: str) -> dict[str, Any]:
     }
     update_state(run_id, stage="datamanager", status=status)
     return payload
+
+
+def _card_report_relpath(footage_run_name: str | None, footage_root: Path, run_id: str) -> Path:
+    card = footage_run_name or (footage_root.name if footage_root.name.startswith("R#") else run_id)
+    return Path("00_Master") / "reports" / card
+
+
+def _manifest_file_payload(file: Any) -> dict[str, Any]:
+    return {
+        "file_id": file.file_id,
+        "job_id": file.job_id,
+        "source_path_id": file.source_path_id,
+        "source_relpath": file.source_relpath,
+        "size_bytes": file.size_bytes,
+        "checksum_source": file.checksum_source,
+        "status": file.status,
+        "error_code": file.error_code,
+        "error_message": file.error_message,
+        "replica_results": [dict(replica.__dict__) for replica in file.replica_results],
+    }
+
+
+def _write_card_reports(
+    project_roots: dict[str, Path],
+    relpath: Path,
+    manifest: dict[str, Any],
+    *,
+    job_id: str,
+    project_name: str,
+    files: list[Any],
+    expected_replica_ids: tuple[str, ...],
+    work_dir: Path,
+) -> dict[str, str]:
+    """Render the card's checksum PDF once, then place it beside every backup."""
+    from app.runtime.checksum_pdf import write_checksum_pdf
+
+    rendered = work_dir / "datamanager" / "checksum.pdf"
+    rendered.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        write_checksum_pdf(rendered, job_id=job_id, project_name=project_name, files=files,
+                           expected_replica_ids=expected_replica_ids)
+    except Exception:
+        rendered.unlink(missing_ok=True)
+    paths: dict[str, str] = {}
+    for label in sorted(project_roots, key=lambda value: int(value[4:])):
+        folder = project_roots[label] / relpath
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            write_json(folder / "manifest.json", manifest)
+            if rendered.is_file():
+                shutil.copyfile(rendered, folder / "checksum.pdf")
+        except OSError:
+            continue
+        if label == "path1":
+            paths["manifest_json"] = str(folder / "manifest.json")
+            if rendered.is_file():
+                paths["checksum_pdf"] = str(folder / "checksum.pdf")
+    return paths
 
 
 def _replica_label(index: int) -> str:
