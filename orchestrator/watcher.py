@@ -38,7 +38,11 @@ def _handle_artifact(artifact: Path, *, direct: bool) -> dict[str, Any]:
                 start_datahelper_stage(run_id, trigger='local-agent-completion')
         elif artifact.name == 'datahelper.done.json':
             from orchestrator.reporting import write_final_report
-            write_final_report(run_id)
+            from orchestrator.visual_qa.scheduler import schedule_after_completion
+            try:
+                write_final_report(run_id)
+            finally:
+                schedule_after_completion(run_id, 'local-agent-completion')
         return {'run_id': run_id, 'artifact': str(artifact), 'action': 'local_agent'}
     if artifact.name == "datamanager.done.json":
         if direct:

@@ -8,7 +8,7 @@ from typing import Any
 from orchestrator.jsonio import write_json
 from orchestrator.paths import DATA_MANAGER_ROOT
 from orchestrator.run_state import events_dir, load_spec, run_dir, update_state, utc_now
-from orchestrator.spec import RUN_MODE_WORKFLOW
+from orchestrator.spec import RUN_MODE_DATAMANAGER, RUN_MODE_WORKFLOW
 from orchestrator.stages import start_datahelper_stage
 from orchestrator.web.progress import write_progress
 
@@ -61,6 +61,12 @@ def run_datamanager(run_id: str) -> dict[str, Any]:
         )
         if spec.run_mode == RUN_MODE_WORKFLOW:
             start_datahelper_stage(run_id, trigger="datamanager_worker")
+        elif spec.run_mode == RUN_MODE_DATAMANAGER:
+            # Copy-only jobs have no report stage, so their copy completion is the
+            # end of the existing work. Workflow jobs schedule QA after DataHelper.
+            from orchestrator.visual_qa.scheduler import schedule_after_completion
+
+            schedule_after_completion(run_id, "datamanager_worker")
     return payload
 
 

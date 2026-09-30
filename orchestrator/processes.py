@@ -7,7 +7,7 @@ import sys
 from orchestrator.paths import LOG_ROOT, ROOT
 
 
-def spawn_python_module(run_id: str, module: str, *args: str) -> int:
+def spawn_python_module(run_id: str, module: str, *args: str, python: str | None = None) -> int:
     LOG_ROOT.mkdir(parents=True, exist_ok=True)
     stdout_path = LOG_ROOT / f"{run_id}.{module.rsplit('.', 1)[-1]}.out.log"
     stderr_path = LOG_ROOT / f"{run_id}.{module.rsplit('.', 1)[-1]}.err.log"
@@ -15,7 +15,7 @@ def spawn_python_module(run_id: str, module: str, *args: str) -> int:
     env["PYTHONPATH"] = _prepend_pythonpath(str(ROOT), env.get("PYTHONPATH"))
     with stdout_path.open("ab") as stdout, stderr_path.open("ab") as stderr:
         process = subprocess.Popen(
-            [sys.executable, "-m", module, *args],
+            [python or sys.executable, "-m", module, *args],
             cwd=str(ROOT),
             env=env,
             stdout=stdout,

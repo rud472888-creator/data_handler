@@ -42,6 +42,8 @@ class RunCreatePayload(BaseModel):
     replica_roots: list[str] | None = None
     profile: str = paths.DEFAULT_HERMES_PROFILE
     run_mode: str = RUN_MODE_WORKFLOW
+    # None inherits the project's "post-completion visual QA" option.
+    visual_qa: bool | None = None
 
 
 class RollPreviewPayload(BaseModel):

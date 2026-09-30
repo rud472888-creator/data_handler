@@ -124,6 +124,17 @@ def run_datahelper(run_id: str) -> dict[str, Any]:
 def _finalize(run_id: str, status: str) -> None:
     """Close the backup-to-report chain locally; Hermes delivery stays optional."""
     try:
+        _close_report_chain(run_id, status)
+    finally:
+        # Visual QA is a separate stage that starts only after the existing
+        # completion handling above, whatever its outcome was.
+        from orchestrator.visual_qa.scheduler import schedule_after_completion
+
+        schedule_after_completion(run_id, "datahelper_worker")
+
+
+def _close_report_chain(run_id: str, status: str) -> None:
+    try:
         from orchestrator.reporting import write_final_report
 
         write_final_report(run_id)

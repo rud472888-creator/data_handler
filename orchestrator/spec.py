@@ -28,6 +28,8 @@ class RunSpec:
     extra_source_paths: tuple[Path, ...] = ()
     run_mode: str = RUN_MODE_WORKFLOW
     flat_card_layout: bool = False
+    # Queue the post-completion visual QA once backup verification and reports finish.
+    visual_qa: bool = False
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "RunSpec":
@@ -50,6 +52,7 @@ class RunSpec:
             extra_source_paths=source_paths[1:],
             run_mode=str(payload.get("run_mode") or RUN_MODE_WORKFLOW),
             flat_card_layout=payload.get("flat_card_layout") is True,
+            visual_qa=_visual_qa_option(payload.get("visual_qa")),
         )
 
     @property
@@ -57,6 +60,12 @@ class RunSpec:
         return (self.source_path, *self.extra_source_paths)
 
     def to_payload(self) -> dict[str, Any]:
+        payload = self._base_payload()
+        if self.visual_qa:
+            payload["visual_qa"] = True
+        return payload
+
+    def _base_payload(self) -> dict[str, Any]:
         return {
             "run_id": self.run_id,
             "project_name": self.project_name,
@@ -97,6 +106,10 @@ class RunSpec:
             raise SpecError("source_path must be different from replica roots")
         if self.footage_run_name is not None:
             _validate_relative_run_path(self.footage_run_name)
+
+
+def _visual_qa_option(value: Any) -> bool:
+    return value is True or (isinstance(value, dict) and value.get("enabled") is True)
 
 
 def _validate_project_name(project_name: str) -> None:
