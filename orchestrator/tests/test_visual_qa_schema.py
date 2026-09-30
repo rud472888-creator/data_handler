@@ -63,6 +63,18 @@ def test_schema_violations_are_rejected(payload):
     assert excinfo.value.kind == "schema_invalid"
 
 
+def test_category_in_assessment_is_normalized_only_when_findings_agree():
+    payload = json.loads(issue_json("black_or_flat_frame", "high"))
+    payload["frame_assessment"] = "black_or_flat_frame"
+    parsed = parse(json.dumps(payload))
+    assert parsed.result["frame_assessment"] == "suspect"
+    assert parsed.result["findings"][0]["category"] == "black_or_flat_frame"
+    assert "assessment_category_normalized" in parsed.warnings
+    payload["findings"][0]["category"] = "focus_or_blur"
+    with pytest.raises(OutputError):
+        parse(json.dumps(payload))
+
+
 def test_finding_field_rules():
     base = json.loads(issue_json())["findings"][0]
     for change in ({"priority": "urgent"}, {"observation": ""}, {"needs_temporal_confirmation": "yes"},

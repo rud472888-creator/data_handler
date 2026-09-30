@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import gc
+import hashlib
 import platform
 import re
 import threading
@@ -115,6 +116,7 @@ class MlxVlmBackend:
         self._model = self._processor = self._config = None
         self._poisoned = False
         self._thinking_check: dict[str, Any] | None = None
+        self._weights_identity: str | None = None
 
     def check_ready(self) -> None:
         if platform.system() != "Darwin" or platform.machine() != "arm64":
@@ -133,6 +135,10 @@ class MlxVlmBackend:
             import mlx_vlm  # noqa: F401
         except ImportError as exc:
             raise BackendUnavailable("runtime_missing", f"mlx-vlm을 불러오지 못했습니다: {exc}") from exc
+        try:
+            self._weights_identity = _model_files_identity(Path(install["local_path"]))
+        except (OSError, ValueError) as exc:
+            raise BackendUnavailable("model_missing", f"모델 파일을 검증하지 못했습니다: {exc}") from exc
         self._install = install
 
     def _load(self) -> None:
@@ -161,6 +167,7 @@ class MlxVlmBackend:
             "loaded_model": install.get("source_repo") or install.get("local_path"),
             "loaded_model_path": install.get("local_path"), "revision": install.get("revision"),
             "quantization": install.get("quantization"), "derived_from": install.get("derived_from"),
+            "weights_identity": self._weights_identity,
             "runtime": {"python": platform.python_version(), "platform": platform.platform(),
                         "mlx": _version("mlx"), "mlx-vlm": _version("mlx-vlm"),
                         "transformers": _version("transformers"), "pillow": _version("pillow")},
@@ -231,6 +238,20 @@ class MlxVlmBackend:
     def close(self) -> None:
         self._model = self._processor = None
         gc.collect()
+
+
+def _model_files_identity(directory: Path) -> str:
+    """Content identity for local weights and model config, independent of names or mtime."""
+    files = sorted({*directory.rglob("*.safetensors"), *directory.rglob("*.json")})
+    if not any(path.suffix == ".safetensors" for path in files):
+        raise ValueError("safetensors 가중치가 없습니다")
+    digest = hashlib.sha256()
+    for path in files:
+        digest.update(path.relative_to(directory).as_posix().encode())
+        with path.open("rb") as handle:
+            for block in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+                digest.update(block)
+    return digest.hexdigest()
 
 
 def make_backend(name: str) -> VisionBackend:

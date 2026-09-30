@@ -52,8 +52,9 @@
     el('visualQaNotice').hidden = !el('visualQaNotice').textContent;
     const active = run && ['queued','running'].includes(run.status) && !run.interrupted;
     const start = el('visualQaStart');
-    start.textContent = !run ? '영상 QA 시작' : active ? '검사 중' : run.status === 'completed' ? '다시 검사 (새 리비전)' : '재시도';
-    start.dataset.action = !run ? 'start' : run.status === 'completed' ? 'rerun' : 'retry';
+    const needsNewRevision = run?.status === 'completed' || run?.reason === 'model_changed';
+    start.textContent = !run ? '영상 QA 시작' : active ? '검사 중' : needsNewRevision ? '다시 검사 (새 리비전)' : '재시도';
+    start.dataset.action = !run ? 'start' : needsNewRevision ? 'rerun' : 'retry';
     start.disabled = !card || busy || active;
     el('visualQaCancel').hidden = !active;
     const link = el('visualQaReport');
@@ -70,7 +71,10 @@
     if (selected?.run_id !== card.run_id) return;
     try {
       const response = await fetch(`/api/library/cards/${encodeURIComponent(card.run_id)}/visual-qa`);
-      if (response.ok) render({...selected, visual_qa: await response.json()});
+      if (response.ok) {
+        const summary = await response.json();
+        if (selected?.run_id === card.run_id) render({...selected, visual_qa: summary});
+      }
     } catch {}
   }
   async function session() {

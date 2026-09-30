@@ -147,7 +147,8 @@ def _visual_qa_command(args: argparse.Namespace) -> int:
             print(f"blocked ({exc.code}): {exc}")
             return 2
         print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["image_input_check"]["passed"] else 1
+        return 0 if (result["image_input_check"]["passed"] and result["clips"]
+                     and all(clip.get("status") == "completed" for clip in result["clips"].values())) else 1
     raise AssertionError(args.qa_command)
 
 

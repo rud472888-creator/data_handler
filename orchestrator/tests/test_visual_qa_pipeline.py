@@ -64,6 +64,20 @@ def test_end_to_end_black_segment_becomes_one_event_with_evidence_and_report(tmp
     assert json.loads(qa.manifest.read_text())["model"]["is_mock"] is True
 
 
+def test_model_metadata_learned_during_inference_is_saved(tmp_path, monkeypatch):
+    env = make_run(tmp_path, monkeypatch, clips={"A/c.mp4": lambda p: write_video(p, 1)})
+    _, qa = start(env)
+
+    class Backend(MockBackend):
+        def describe(self):
+            return {**super().describe(), "thinking_check": {"observed": self.calls > 0}}
+
+    state = run_worker(env, qa, Backend(lambda *a: CLEAN_JSON))
+    assert state["status"] == store.COMPLETED
+    assert json.loads(qa.manifest.read_text())["model"]["thinking_check"] == {"observed": True}
+    assert json.loads(qa.findings.read_text())["model"]["thinking_check"] == {"observed": True}
+
+
 def test_identical_replicas_are_inspected_once(tmp_path, monkeypatch):
     env = make_run(tmp_path, monkeypatch, replicas=3, clips={"A/c.mp4": lambda p: write_video(p, 5)})
     _, qa = start(env)
@@ -100,6 +114,37 @@ def test_retry_recovers_valid_answer_on_second_attempt(tmp_path, monkeypatch):
     state = run_worker(env, qa, MockBackend(lambda *a: next(answers)))
     assert state["status"] == store.COMPLETED
     assert [len(f["attempts"]) for f in frames_of(qa)] == [2, 1]
+
+
+def test_cancel_marker_stops_within_single_clip(tmp_path, monkeypatch):
+    env = make_run(tmp_path, monkeypatch, clips={"A/c.mp4": lambda p: write_video(p, 12)})
+    _, qa = start(env)
+    def respond(*_):
+        (qa.path / "cancel.requested").write_text("cancel")
+        return CLEAN_JSON
+    backend = MockBackend(respond)
+    state = run_worker(env, qa, backend)
+    assert state["status"] == store.CANCELLED
+    assert backend.calls == 1 and len(frames_of(qa)) == 1
+
+
+def test_first_decoded_frame_metadata_reaches_journal_and_report(tmp_path, monkeypatch):
+    from orchestrator.visual_qa.decode import ClipReader
+
+    class RotatedReader(ClipReader):
+        def frames(self, *args, **kwargs):
+            for frame in super().frames(*args, **kwargs):
+                self.info.rotation_deg = frame._rotation = 90
+                yield frame
+
+    env = make_run(tmp_path, monkeypatch, clips={"A/c.mp4": lambda p: write_video(p, 2)})
+    _, qa = start(env)
+    state = run_worker(env, qa, MockBackend(lambda *a: CLEAN_JSON), reader_factory=RotatedReader)
+    assert state["status"] == store.COMPLETED
+    assert frames_of(qa)[0]["decode"]["rotation_applied_deg"] == 90
+    assert frames_of(qa)[0]["source_size"] == [180, 320]
+    findings = json.loads(qa.findings.read_text())
+    assert findings["clips"][0]["info"]["rotation_deg"] == 90
 
 
 def test_truncated_output_is_failure_after_bounded_retries(tmp_path, monkeypatch):

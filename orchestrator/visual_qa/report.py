@@ -284,7 +284,7 @@ def _event_html(event: dict[str, Any]) -> str:
             f"<dl><dt>구간</dt><dd>{e(frames_text)} · {e(time_text)} <span class=\"muted\">(클립 상대 시각)</span></dd>"
             f"<dt>관찰</dt><dd>{e(event['observation'])}</dd><dt>확인 이유</dt><dd>{e(event['reason_for_review'])}</dd>"
             f"<dt>사람이 확인할 사항</dt><dd>{e(event['suggested_human_check'])}</dd>"
-            f"<dt>판단의 한계</dt><dd>{e(event.get('uncertainty') or '모델이 별도 불확실성을 밝히지 않았습니다.')} {e(temporal)}</dd>"
+            f"<dt>판단의 한계</dt><dd>{e(event.get('uncertainty') or '모델이 별도 불확실성을 밝히지 않았습니다.')} {e(temporal)} {e(event.get('evidence_note') or '')}</dd>"
             f"<dt>위치</dt><dd>{e(where)}</dd></dl><div class=\"shots\">{''.join(shots)}</div>"
             f"<p>{links}</p></article>")
 

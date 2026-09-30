@@ -38,6 +38,26 @@ def test_single_frame_event_is_kept():
     assert events[0]["temporal_status"] == "single_frame_only"
 
 
+def test_bright_and_black_single_flat_frames_keep_model_priority():
+    bright = frame(1, [finding("black_or_flat_frame", "high", temporal=True)])
+    bright["image_stats"] = {"mean_luma": 140}
+    dark = frame(3, [finding("black_or_flat_frame", "high", temporal=True)])
+    dark["image_stats"] = {"mean_luma": 1}
+    events = group_events([bright, dark], CLIPS)
+    assert [e["priority"] for e in events] == ["high", "high"]
+    assert "140.0/255" in events[0]["evidence_note"] and events[0]["evidence_frames"]
+    assert "1.0/255" in events[1]["evidence_note"]
+
+
+def test_brightness_alone_does_not_split_same_category_event():
+    black = frame(4, [finding("black_or_flat_frame", "high")])
+    black["image_stats"] = {"mean_luma": 0}
+    bar = frame(5, [finding("black_or_flat_frame", "high")])
+    bar["image_stats"] = {"mean_luma": 105}
+    events = group_events([black, bar], CLIPS)
+    assert [(e["start_frame"], e["end_frame"]) for e in events] == [(4, 5)]
+
+
 def test_clean_frame_between_findings_splits_events():
     frames = [frame(1, [finding()]), frame(2), frame(3, [finding()])]
     assert len(group_events(frames, CLIPS)) == 2

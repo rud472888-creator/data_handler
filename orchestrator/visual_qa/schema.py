@@ -165,9 +165,16 @@ def validate_frame_result(payload: Any, *, image_size: tuple[int, int], source_s
     if not isinstance(payload, dict):
         raise _bad("최상위 값이 객체가 아닙니다.")
     assessment = payload.get("frame_assessment")
+    raw_findings = payload.get("findings")
+    # Repair only the unambiguous case where a finding category was copied into
+    # the assessment field. The journal still retains the original model text.
+    if (assessment in CATEGORIES and isinstance(raw_findings, list) and raw_findings
+            and all(isinstance(item, dict) and item.get("category") == assessment for item in raw_findings)):
+        assessment = "suspect"
+        if warnings is not None:
+            warnings.append("assessment_category_normalized")
     if assessment not in ASSESSMENTS:
         raise _bad(f"frame_assessment 값이 올바르지 않습니다: {assessment!r}")
-    raw_findings = payload.get("findings")
     if not isinstance(raw_findings, list):
         raise _bad("findings는 목록이어야 합니다.")
     if len(raw_findings) > MAX_FINDINGS:

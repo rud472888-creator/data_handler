@@ -5,7 +5,7 @@ from typing import Any
 
 from orchestrator.visual_qa.schema import CATEGORY_LABELS, PRIORITY_RANK, iou
 
-GROUPING_VERSION = "vqa-group-v1"
+GROUPING_VERSION = "vqa-group-v2"
 
 
 def _bbox(finding: dict[str, Any]) -> list[float] | None:
@@ -98,13 +98,20 @@ def _finalize(event: dict[str, Any], clip: dict[str, Any], sequence: int) -> dic
                                   "evidence": ev})
     count = len(items)
     temporal_flag = any(r["findings"][p]["needs_temporal_confirmation"] for r, p in items)
+    priority = max((r["findings"][p]["priority"] for r, p in items), key=PRIORITY_RANK.get)
+    evidence_note = None
+    if event["category"] == "black_or_flat_frame" and count == 1:
+        mean_luma = (items[0][0].get("image_stats") or {}).get("mean_luma")
+        if isinstance(mean_luma, (int, float)):
+            evidence_note = f"단일 프레임의 평균 밝기: {mean_luma:.1f}/255. 회색·흰색 단색 고장도 가능하므로 이 값으로 우선순위를 바꾸지 않습니다."
     return {
         "event_id": f"evt-{event['clip_id']}-{event['start_frame']:07d}-{event['category']}-{sequence}",
         "clip_id": event["clip_id"],
         "clip_name": clip.get("display_name"),
         "category": event["category"],
         "category_label": CATEGORY_LABELS[event["category"]],
-        "priority": max((r["findings"][p]["priority"] for r, p in items), key=PRIORITY_RANK.get),
+        "priority": priority,
+        "evidence_note": evidence_note,
         "start_frame": event["start_frame"], "end_frame": event["end_frame"],
         "start_time_s": first.get("clip_time_s"), "end_time_s": last.get("clip_time_s"),
         "frame_count": count, "frames": frames,

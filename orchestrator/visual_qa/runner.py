@@ -20,7 +20,8 @@ STATE_INTERVAL_S = 1.0
 
 
 def model_fingerprint(description: dict[str, Any]) -> str:
-    keys = ("backend", "is_mock", "original_model_id", "loaded_model", "revision", "quantization")
+    keys = ("backend", "is_mock", "original_model_id", "loaded_model", "loaded_model_path",
+            "revision", "quantization", "weights_identity")
     return digest({k: description.get(k) for k in keys})
 
 
@@ -105,6 +106,10 @@ def run_qa(qa_dir: Path, backend: VisionBackend, *, reader_factory: ReaderFactor
         _run_clips(run)
     finally:
         run.close()
+    # The backend learns its rendered-prompt metadata on the first inference.
+    # Persist that observation for the report without changing model identity.
+    manifest["model"] = backend.describe()
+    store.write_json_atomic(qa.manifest, manifest)
     session.update(ended_at=utc_now(), wall_s=round(time.monotonic() - started, 2))
     return _finalize(qa, manifest, run, session)
 
@@ -119,8 +124,7 @@ def _run_clips(run: Run) -> None:
     else:
         selected_ids = None
     for clip in clips:
-        if run.stop.is_set() or run.qa.path.joinpath("cancel.requested").exists():
-            run.stop.set()
+        if _cancel_requested(run):
             return
         if run.poisoned:
             _clip_record(run, clip, "not_run", reason="backend_stopped", message=run.poisoned)
@@ -135,6 +139,8 @@ def _run_clips(run: Run) -> None:
             run.counts["clips_done"] += 1
             continue
         _process_clip(run, clip)
+        if _cancel_requested(run):
+            return
         run.counts["clips_done"] += 1
         run.publish(force=True, status=store.RUNNING, phase="inspecting")
 
@@ -142,6 +148,13 @@ def _run_clips(run: Run) -> None:
 def _clip_record(run: Run, clip: dict[str, Any], status: str, **fields: Any) -> None:
     run.clip_log.append({"type": "clip", "clip_id": clip["clip_id"], "display_name": clip["display_name"],
                          "status": status, "at": utc_now(), **fields})
+
+
+def _cancel_requested(run: Run) -> bool:
+    if run.stop.is_set() or (run.qa.path / "cancel.requested").exists():
+        run.stop.set()
+        return True
+    return False
 
 
 def _viable_candidates(clip: dict[str, Any]) -> list[dict[str, Any]]:
@@ -179,7 +192,7 @@ def _process_clip(run: Run, clip: dict[str, Any]) -> None:
     declared: int | None = None
     previous_label: str | None = None
     for candidate in _viable_candidates(clip):
-        if run.stop.is_set() or run.poisoned:
+        if _cancel_requested(run) or run.poisoned:
             break
         reason = _check_candidate(candidate)
         if reason:
@@ -204,8 +217,10 @@ def _process_clip(run: Run, clip: dict[str, Any]) -> None:
             lambda r=reader, s=next_start, e=cfg.end_frame, l=remaining: r.frames(s, e, l), cfg.queue_size)
         try:
             for frame in producer:
-                if run.stop.is_set():
+                if _cancel_requested(run):
                     break
+                # First-frame metadata is populated during decode, after _probe.
+                info = reader.info.to_payload()
                 outcome = _handle_frame(run, clip, frame, prior, candidate["label"], info)
                 handled += 1
                 last_index = frame.index
@@ -224,11 +239,14 @@ def _process_clip(run: Run, clip: dict[str, Any]) -> None:
                     break
                 run.publish(status=store.RUNNING, phase="inspecting", current_clip=clip["display_name"],
                             current_frame=frame.index)
+                if _cancel_requested(run):
+                    break
         finally:
             producer.close()
             run.decode_s += producer.decode_seconds
             reader.close()
         eof = reader.eof_reached
+        info = reader.info.to_payload()
         decode_error = str(producer.error) if producer.error is not None else None
         if decode_error:
             run.error("decode_error", decode_error, clip_id=clip_id, replica=candidate["label"], frame_index=next_start)
@@ -282,6 +300,9 @@ def _handle_frame(run: Run, clip: dict[str, Any], frame: Any, prior: dict[int, d
     try:
         image = frame.image()
         model_image, preprocess = prepare_model_image(image, run.config.model_max_side)
+        from PIL import ImageStat
+
+        record["image_stats"] = {"mean_luma": round(ImageStat.Stat(model_image.convert("L")).mean[0], 1)}
         record["source_size"] = list(image.size)  # after display rotation
     except Exception as exc:
         record.update(status="failed", error={"kind": "decode_convert_failed", "message": str(exc)[:400]})

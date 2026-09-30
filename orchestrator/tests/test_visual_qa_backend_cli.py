@@ -59,7 +59,9 @@ def install_fake_mlx(monkeypatch, generate):
 
 
 def ready_backend(apple, monkeypatch, generate):
-    (apple / "w").mkdir(parents=True)
+    (apple / "w").mkdir(parents=True, exist_ok=True)
+    (apple / "w" / "config.json").write_text("{}")
+    (apple / "w" / "model.safetensors").write_bytes(b"test weights")
     (apple / settings.MODEL_MANIFEST).write_text(json.dumps({
         "local_path": str(apple / "w"), "original_model_id": "Qwen/Qwen3.5-4B", "source_repo": "Qwen/Qwen3.5-4B",
         "revision": "abc123", "quantization": None}))
@@ -86,6 +88,17 @@ def test_mlx_glue_passes_pil_images_single_turn_thinking_off_and_records_version
     description = backend.describe()
     assert description["revision"] == "abc123" and description["original_model_id"] == "Qwen/Qwen3.5-4B"
     assert description["thinking_check"]["empty_think_block_present"] is True and description["is_mock"] is False
+
+
+def test_weight_content_changes_model_fingerprint(apple, monkeypatch):
+    from orchestrator.visual_qa.runner import model_fingerprint
+    backend = ready_backend(apple, monkeypatch, lambda *a, **k: None)
+    first = model_fingerprint(backend.describe())
+    (apple / "w" / "model.safetensors").write_bytes(b"different weights")
+    changed = MlxVlmBackend()
+    changed.check_ready()
+    assert changed.describe()["weights_identity"] != backend.describe()["weights_identity"]
+    assert model_fingerprint(changed.describe()) != first
 
 
 def test_mlx_errors_are_classified_and_timeouts_poison_the_backend(apple, monkeypatch):
@@ -187,3 +200,20 @@ def test_smoke_stops_when_the_model_does_not_see_the_image(tmp_path):
 
     result = run_smoke(MockBackend(lambda *a: "잘 모르겠습니다"), tmp_path / "smoke")
     assert result["image_input_check"]["passed"] is False and result["clips"] == {}
+
+
+def test_cli_smoke_fails_if_image_check_passes_but_clips_fail(tmp_path, monkeypatch, capsys):
+    pytest.importorskip("av")
+    from orchestrator.visual_qa.backend import MockBackend
+
+    def responder(images, _system, user):
+        if "색을 한 단어" in user:
+            red, _, blue = images[0].getpixel((224, 224))
+            return "빨강" if red > blue else "파랑"
+        return "not-json"
+
+    monkeypatch.setattr(backend_module, "MlxVlmBackend", lambda: MockBackend(responder))
+    assert cli.main(["visual-qa", "smoke", "--output", str(tmp_path / "smoke")]) == 1
+    result = json.loads((tmp_path / "smoke" / "smoke-result.json").read_text())
+    assert result["image_input_check"]["passed"] is True
+    assert {clip["status"] for clip in result["clips"].values()} == {"failed"}

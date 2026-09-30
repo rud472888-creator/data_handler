@@ -65,6 +65,10 @@ python -m orchestrator.cli visual-qa report --run-id <run_id> --qa-id <qa_id>   
 ```
 
 worker는 `DATA_HANDLER_VISUAL_QA_PYTHON` 또는 위 venv의 python으로 실행됩니다(없으면 현재 python).
+기본 모델 등록 위치는 `~/Library/Application Support/Data Handler/visual-qa/models/model-install.json`입니다.
+테스트처럼 `DATA_HANDLER_VISUAL_QA_HOME`을 별도 경로로 지정했다면, 자동 QA를 시작하는 앱 프로세스에도
+같은 환경 변수를 적용해야 worker가 동일한 등록 정보를 찾습니다. 터미널의 수동 검사에만 적용하면 자동 검사는
+`model_not_installed`로 막힐 수 있습니다. 일반 앱에서는 위 기본 위치에 설치·등록하는 편이 간단합니다.
 모델은 앱 번들 밖(`visual-qa/models`)에 있고, 로드는 `HF_HUB_OFFLINE=1`로 로컬 경로에서만 합니다.
 모델이 없거나 플랫폼/런타임이 맞지 않으면 QA는 `blocked`와 구체적 사유(`model_not_installed`,
 `unsupported_platform`, `runtime_missing` …)로 끝나며 어떤 프레임도 "정상"으로 기록하지 않습니다.
