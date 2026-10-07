@@ -1,7 +1,7 @@
 :root {
   --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px;
   --space-5:20px; --space-6:24px; --space-8:32px; --space-12:48px;
-  --radius-control:4px; --radius-panel:8px;
+  --radius-control:var(--radius-md); --radius-panel:var(--radius-lg);
   --text-small:12px; --text-body:13px; --text-heading:18px; --text-empty:24px;
   --chat-width:880px; --chat-control:36px; --chat-touch:44px; --chat-composer:96px;
   --chat-min:400px; --chat-context:220px; --chat-stroke:1px; --chat-focus:2px;
@@ -56,7 +56,7 @@ body[data-mode=agent] main {min-height:0;overflow:hidden}
 .agent-panel textarea::placeholder {color:var(--muted)}
 .agent-input-row button {align-self:flex-end;flex-shrink:0}
 .agent-composer-footer {justify-content:space-between;flex-wrap:wrap;margin-top:var(--space-2)}
-@media(max-width:700px) {
+@media(max-width:767px) {
   body[data-mode=agent] {grid-template-rows:auto minmax(0,1fr)}
   body[data-mode=agent] .sidebar {padding:var(--space-3) var(--space-4);gap:var(--space-3)}
   body[data-mode=agent] .sidebar #projects,body[data-mode=agent] .sidebar #days,

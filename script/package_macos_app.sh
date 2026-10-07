@@ -38,6 +38,7 @@ rm -rf "$BUILD_DIR" "$APP_BUNDLE" "$DMG_PATH"
 mkdir -p "$BUILD_DIR" "$APP_MACOS" "$APP_RESOURCES" "$APP_ROOT"
 
 swiftc \
+  -target "$(uname -m)-apple-macosx$MIN_SYSTEM_VERSION" \
   "$ROOT_DIR/packaging/macos/DataHandlerApp.swift" \
   -framework Cocoa \
   -framework WebKit \

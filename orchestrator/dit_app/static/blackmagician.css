@@ -34,7 +34,7 @@
 .blackmagician-list .good {color:var(--good)}
 .blackmagician-list .warning {color:var(--warning)}
 .blackmagician-list .failed {color:var(--danger)}
-@media(max-width:700px) {
+@media(max-width:767px) {
   #blackmagicianDialog {width:calc(100% - 32px)}
   .blackmagician-field-row,.blackmagician-grid {grid-template-columns:1fr}
   .blackmagician-connect input,.blackmagician-connect select,.blackmagician-actions button {min-height:var(--chat-touch)}
@@ -68,11 +68,11 @@ body[data-mode=blackmagician] main {min-height:0;overflow:hidden}
 .shooting-tabs,.shooting-project-picker {display:none}
 .shooting-agent .agent-header {flex-wrap:wrap;padding:var(--space-4)}
 .shooting-agent .agent-log,.shooting-agent .agent-composer {padding:var(--space-4)}
-@media(max-width:1100px) {
+@media(max-width:1119px) {
   .shooting-body {grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) minmax(0,2fr)}
   .shooting-details {border-right:0;border-bottom:var(--chat-stroke) solid var(--border);max-height:var(--shooting-compact-height)}
 }
-@media(max-width:700px) {
+@media(max-width:767px) {
   body[data-mode=blackmagician] {grid-template-rows:auto minmax(0,1fr)}
   body[data-mode=blackmagician] .sidebar {padding:var(--space-3) var(--space-4);gap:var(--space-3)}
   body[data-mode=blackmagician] .sidebar #days,body[data-mode=blackmagician] .sidebar .volumes,

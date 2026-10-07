@@ -1,0 +1,16 @@
+{
+  "name": "@caffeinecatkr/blurssism",
+  "version": "1.5.0",
+  "repository": "https://github.com/leeuc10/blurssism",
+  "commit": "f87d4d5708cc9ebd88b715d40f4f3cee97515010",
+  "retrieved_on": "2026-10-07",
+  "license": "MIT",
+  "adaptations": [
+    "Removed remote font imports from application CSS; licensed fonts are bundled locally."
+  ],
+  "upstream_sha256": {
+    "tokens.css": "2d438d06bb1a31b2f300897e49de6f41045091dc5a9b50d629388773391bb1f0",
+    "bundle.css": "de26844a5867a1cba7bb7701f3f5f79aa3bb370441c39b8a3d84f42e673dd2eb",
+    "utils.mjs": "8fa73b0daaa09462c326fa392e60dd40deba07c3ccaee38eb27f20e8041fb824"
+  }
+}

@@ -16,15 +16,15 @@
 .review-finding {margin:0;padding:var(--space-3) 0;border-top:var(--chat-stroke) solid var(--border)}
 .review-finding dt {color:var(--muted);font-size:var(--text-small);margin-top:var(--space-2)}
 .review-finding dd {margin:var(--space-1) 0 0}
-@media(min-width:1101px) {
+@media(min-width:1120px) {
   .library #content {flex:1;min-height:0}
   .library>footer {flex-shrink:0}
 }
-@media(max-width:1100px) {
+@media(max-width:1119px) {
   .workspace-reviews {border-left:0;border-top:var(--chat-stroke) solid var(--border)}
   #reviewMessages {flex:auto;max-height:var(--chat-min)}
 }
-@media(max-width:700px) {
+@media(max-width:767px) {
   #days {min-height:var(--chat-touch)}
   #volumes {min-height:calc(var(--chat-touch) + var(--space-4))}
   .workspace-reviews {padding:var(--space-4)}

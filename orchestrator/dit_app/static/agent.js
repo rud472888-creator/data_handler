@@ -1,7 +1,9 @@
 (() => {
   const el = id => document.getElementById(id);
+  const stored = key => { try { return localStorage.getItem(key); } catch { return null; } };
+  const store = (key, value) => { try { value ? localStorage.setItem(key, value) : localStorage.removeItem(key); } catch {} };
   const safe = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const chat = {token:null, connected:false, id:localStorage.getItem('dit-agent-conversation'),
+  const chat = {token:null, connected:false, id:stored('dit-agent-conversation'),
     conversation:null, conversations:[], projects:[], sending:false, pending:false, signature:'', revision:0, retry:null};
   const statusText = {pending:'실행 확인 대기', expired:'유효시간 만료', claimed:'실행 접수됨',
     started:'복제 시작됨', completed:'작업 완료', needs_review:'확인 필요'};
@@ -24,6 +26,10 @@
     el('agentNew').disabled = chat.sending;
     el('agentHistory').disabled = chat.sending;
     el('agentSend').textContent = chat.sending ? '접수 중' : '전송';
+    const approvals = [...el('agentLog').querySelectorAll('[data-approve]')];
+    const latestApproval = approvals.filter(button => !button.disabled).at(-1);
+    approvals.forEach(button => button.classList.toggle('primary', button === latestApproval));
+    el('agentSend').classList.toggle('primary', !latestApproval);
     el('agentProject').disabled = shooting() || !!chat.conversation?.turns.length || chat.sending;
     el('agentSend').disabled ||= shooting() && (!state.project || chat.conversation && chat.conversation.project_id !== state.project);
     el('agentSendHint').textContent = chat.pending ? '요청을 처리하고 있습니다. 앱을 닫아도 기록은 유지됩니다.' : shooting() ? '답변에는 확인한 촬영 기록의 시각이 남습니다.' : '경로를 확인한 뒤 복제를 시작합니다.';
@@ -145,7 +151,7 @@
         const created = await request('/conversations', {project_id:targetProject});
         conversationId = created.id;
         if (stillSelected()) {
-          chat.id = created.id; localStorage.setItem('dit-agent-conversation', chat.id);
+          chat.id = created.id; store('dit-agent-conversation', chat.id);
         }
       }
       const key = requestId || crypto.randomUUID();
@@ -170,7 +176,7 @@
     el('blackmagicianLiveMode').setAttribute('aria-pressed', isShooting);
     el('workspaceMode').setAttribute('aria-pressed', value === 'workspace');
     el('agentMode').setAttribute('aria-pressed', value === 'agent');
-    localStorage.setItem('dit-mode', value);
+    store('dit-mode', value);
     el('agentContextHint').textContent = isShooting ? '연결된 촬영 기록을 근거로 답합니다.' : '원본과 백업 경로를 1개 이상 알려 주세요.';
     el('agentInput').placeholder = isShooting ? '예: 최근 테이크의 씬과 결과를 알려줘' : '예: 오늘 촬영 카드를 지정한 경로에 백업해줘';
     document.dispatchEvent(new CustomEvent('dit-mode-changed', {detail:{mode:value}}));
@@ -186,7 +192,7 @@
     if (!shooting()) return;
     if (chat.shootingProject !== state.project || chat.conversation && chat.conversation.project_id !== state.project) {
       chat.revision++; chat.id = null; chat.conversation = null; chat.retry = null;
-      localStorage.removeItem('dit-agent-conversation');
+      store('dit-agent-conversation', null);
       el('agentInput').value = '';
       historyOptions();
     }
@@ -198,7 +204,7 @@
   el('agentReconnect').onclick = connect;
   el('agentNew').onclick = () => {
     chat.revision++; chat.id = null; chat.conversation = null; chat.retry = null;
-    localStorage.removeItem('dit-agent-conversation'); el('agentInput').value = '';
+    store('dit-agent-conversation', null); el('agentInput').value = '';
     historyOptions(); projectOptions(); render(true); el('agentInput').focus();
     if (shooting()) selectShootingProject();
   };
@@ -220,8 +226,8 @@
   });
   el('agentHistory').onchange = async e => {
     chat.id = e.target.value || null; chat.retry = null;
-    if (chat.id) localStorage.setItem('dit-agent-conversation',chat.id);
-    else localStorage.removeItem('dit-agent-conversation');
+    if (chat.id) store('dit-agent-conversation',chat.id);
+    else store('dit-agent-conversation', null);
     try { await loadConversation(chat.id, true); } catch (error) { notice(error.message); }
     if (shooting()) selectShootingProject();
   };
@@ -271,5 +277,5 @@
     finally { polling = false; }
   }, 2500);
   render(true);
-  if (['agent','blackmagician'].includes(localStorage.getItem('dit-mode'))) mode(localStorage.getItem('dit-mode'));
+  if (['agent','blackmagician'].includes(stored('dit-mode'))) mode(stored('dit-mode'));
 })();
