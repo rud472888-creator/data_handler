@@ -1,6 +1,6 @@
 # DIT workspace redesign
 
-2026-10-07. Replaces the visual direction in `uiux-blurssism-update.md` after operator feedback. The previous Blurssism installation and upstream provenance remain available, but the app no longer loads its palettes, crema effects or serif heading styles.
+2026-10-07. Replaces the visual direction in `uiux-blurssism-update.md` after operator feedback. This document records the DIT layout redesign. The subsequent black color and Blurssism material contract is documented in `uiux-black-blurssism.md` and `orchestrator/dit_app/DESIGN.md`.
 
 ## Reference research
 

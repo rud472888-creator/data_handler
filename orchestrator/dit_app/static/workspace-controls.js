@@ -127,7 +127,7 @@
     const scroll = pane.scrollTop;
     const focusedLink = pane.contains(document.activeElement) ? document.activeElement.closest('a')?.getAttribute('href') : null;
     if (!card) {
-      pane.innerHTML = '<p class="muted">카드를 선택하면 원본·백업 경로와 검증 결과가 표시됩니다.</p>';
+      pane.innerHTML = '<p class="muted">카드를 선택하면 원본·백업 경로와 검증 결과를 볼 수 있어요.</p>';
       announcement.textContent = ''; return;
     }
     const destinations = card.destinations || [];

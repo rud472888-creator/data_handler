@@ -1,49 +1,45 @@
 # DIT workspace design contract
 
-## Source
+## Source and direction
 
-Blurssism 1.5.0, upstream commit `f87d4d5708cc9ebd88b715d40f4f3cee97515010`, retrieved 2026-10-07 from https://github.com/leeuc10/blurssism. The Codex adapter is installed at `~/.codex/skills/blurssism/SKILL.md`; upstream ships a package and brand book rather than an agent skill. This contract replaces the previous dark instrument theme.
+The layout follows the professional media workspaces documented in `docs/uiux-dit-redesign.md`: project/day navigator, card library, inspector and durable job records. The operator requested a completely achromatic black interface and selective Blurssism styling. Black, gray and white therefore replace the upstream warm paper and colored status palette.
 
-The checked-in framework-independent distribution is `static/vendor/blurssism/`, including its MIT license and exact source hashes in `source.json`. Only remote font imports are removed from the application copies. Pretendard 1.3.9 and Gowun Batang are bundled in `static/fonts/`, with SIL OFL licenses and source hashes, so screen rendering does not require a network.
+Use Blurssism **1.5.0**, upstream commit `f87d4d5708cc9ebd88b715d40f4f3cee97515010`. Its distribution, MIT license and source hashes are in `static/vendor/blurssism/`. Application copies remove remote font imports; the vendor files remain unchanged by the black adaptation. Local Pretendard and Gowun Batang include SIL OFL licenses. No external font or analytics request is required.
 
-## Tokens and typography
+Load local fonts, upstream tokens and bundle, feature styles, then `design-system.css`. The app uses the real `.bl-crema`, `.bl-crema-thick`, `setTheme`, `setPalette` and `applyCremaPreference` APIs. The graphite identifier is retained, with explicitly achromatic application token overrides; this is not the unmodified warm graphite palette.
 
-Load local fonts, upstream tokens, upstream component styles, existing feature styles, and finally `design-system.css`. The adapter maps existing `--bg`, `--surface`, `--raised`, `--border`, `--text`, `--muted`, `--selected`, and `--good` names to Blurssism tokens. Avoid introducing feature-specific hardcoded colors.
+## Color, typography and shape
 
-Use paper, paper-raised, paper-sunken and ink for at least 90% of the visible screen. Espresso is the initial palette; all 13 upstream palettes and system/light/dark themes are selectable. Status retains both its actual label and semantic color. Selected modes and projects include a dot; selected rows include a left rule and aria-pressed on the card button.
+At least 90% of the screen is paper/ink. Default paper is black `#090909`, raised reading surfaces are `#131313`, and text uses neutral white/gray. Every foreground, surface, state, focus and material tint is achromatic. Successful, waiting, active, warning and failed states remain distinguishable by their words and icons. State color is not required to understand a record.
 
-Pretendard is the UI face, 14px/1.6 body and 12–13px metadata. Large project names, the app name and empty-state headings use Gowun Batang. Paths stay 12px monospace, break safely, and never become serif. Numerical records use tabular figures. Keep Korean prose in 해요체, with word-level wrapping and concrete recovery instructions.
+Pretendard is used for controls, tables and metadata. Large user-created project names and empty-state headings use Gowun Batang at 20px. Paths and card identifiers remain monospace; counts use tabular figures. The compact desktop typography intentionally preserves the operator's accepted DIT density. Korean text uses `keep-all`; long filesystem paths explicitly allow wrapping. New interface copy uses 해요체.
 
-## Layout and components
+Buttons and tabs are capsules. Fields have 16px corners, reading panels and dialogs 24px. General desktop controls are 40px, touch controls 44px. Inline card/job controls retain their compact target within the 40/32px rows. Focus is a visible 2px neutral ring; input boundaries meet 3:1. A selected mode/tab also has a visible dot, and selected cards/projects have a leading rule.
 
-The permanent project sidebar preserves project → shooting day → card navigation. At lg (1120px) and above, the sidebar is 248px, the review pane is 304px, and library/review/queue panels remain independently scrollable in a viewport-locked workspace. At xl (1440px), sidebar/review widths become 264/336px. The working surfaces are opaque paper-raised with a 24px radius and a fine line.
+## Layout and materials
 
-Below lg, reviews stack beneath the library. Below md (768px), mode navigation becomes a fixed bottom capsule, card rows become labeled stacked cells, and dialogs become bottom sheets capped at 90dvh. The source breakpoints are xs below 600px, sm from 600px, md from 768px, lg from 1120px, xl from 1440px. Use the upstream grid margins on narrow screens. No horizontal clipping at 320px and above.
+Navigator width defaults to 216px and supports 180–320px. Inspector width defaults to 304px and supports 240–420px. Dragging and Left/Right, Shift+Left/Right, Home/End adjust separators. Below 1100px the inspector is an overlay; below 768px the navigator is off-canvas and card cells reflow. The native window minimum remains 1000×700.
 
-Buttons use capsule corners; inputs/selects/textareas use 16px corners; panels/dialogs use 24px or larger. Desktop controls are at least 40px, touch controls at least 44px. Use 4px-unit spacing. Focus is a 2px focus-ring with a 3px offset. Controls use line-strong borders, never decorative low-contrast borders. Disabled controls use paper-sunken/ink-subtle instead of fading the whole element.
+Only floating mode navigation, library tabs and modal dialogs use crema. The navbar and tabs use thin crema; dialogs use thick crema. Library rows, inspector prose, path fields and chat content remain opaque. There is no nested crema or blur in repeated records. Neutral static washes behind the floating controls provide a backdrop; the upstream stationary grain/band/edge stack is reduced in strength and made achromatic.
 
-Keep one primary action in the active view. The library uses its empty-state CTA until it contains cards, then the toolbar import action. In agent chat, the latest available approval takes priority over Send; earlier approvals remain secondary. Confirmation dialogs have their own primary action.
+The normal workspace has two visible crema surfaces; an open dialog makes three. Agent/shooting modes have one before a dialog opens. Rich mode and pointer-following lights are disabled. Manual effect-off, reduced transparency, low hardware capacity or data saving resolve to opaque surfaces. Changes to reduced transparency/data saving are handled while open. Reduced motion removes transitions and animation; blur radius is never animated.
 
-## Material, effects and appearance
+## Appearance and accessibility
 
-Only the mode navigation, library tabs and dialogs use crema. Lists, rows, status chips, fields, review prose and conversation content are opaque. Do not nest crema or add blur to repeated rows. Default mode has at most three visible crema surfaces, rich desktop mode at most six, off mode zero. Use the 1.5 crema names rather than the deprecated glass names.
+Validate and persist theme, density and `crema: auto|off` in `dit-workspace-appearance`. Apply theme and density before first paint; material starts opaque until the upstream helper resolves device preferences. Black is the default. The optional white/system views use the same achromatic rules. Storage failure keeps the applied setting and reports that it cannot be saved.
 
-Appearance settings live in a small labeled dialog reachable from every mode. Persist validated choices in `dit-appearance`. Apply saved colors before the first paint. System theme follows OS color-scheme changes. Storage failure leaves the current settings applied and reports that they cannot persist; project/chat storage also fails gracefully.
+Keep semantic native buttons, labels, table headers, inspector tabs, named keyboard-adjustable separators, skip navigation and polite announcements. Native dialogs contain Tab/Shift+Tab, support Escape and restore their captured opener, including macOS AX activation. Scrollable path/review/chat regions remain keyboard-focusable. Automatic contrast reports on glass gradients require a separate manual/composited contrast check.
 
-Use the upstream device-aware crema helper. Hardware/data-saving/reduced-transparency fallback overrides effects, and changes to reduced transparency or connection settings are handled while the app is open. Rich mode can adapt to desktop width. Pointer-following lights are disabled for this operational workspace. No simulated progress, blur-radius animation, decorative movement or background motion. Reduced motion disables animation and transitions.
+Keep one primary action in the active view. Import remains available in the toolbar for an empty or populated selected project. Confirmation dialogs have their own primary action.
 
 ## Operational invariants
 
-Card import remains a form followed by explicit confirmation of project, original source and every final destination. Destinations are ordered and unlimited, start with one row, preserve a minimum of one, and retain a labeled native folder picker where available. Fields/review lists scroll, and the confirmation footer stays visible. Editing a 100-path plan must retain every path. Appearance changes never start a run or alter the copy/reporting engines.
+Card import is a form followed by explicit confirmation of project, source and every final backup path. Replica lists are ordered and unlimited, maintain at least one row and retain native folder pickers. Fields/review lists scroll while the import footer stays visible. Appearance changes never start a run or change the copy/report engines.
 
-Verification is derived only from durable completion events. PDF failures remain separate from checksum results. Missing or offline artifacts retain their reason. Do not add fabricated percentages, speeds, ETA or per-replica progress. The queue and review panes report actual states and completion evidence.
-
-Project removal still requires confirmation, preserves original/backup/PDF files and workflow records, and offers undo. Busy/unconfirmed projects remain protected by the existing API. PDF previews remain native dialogs with opaque frames and a reachable close action.
-
-Agent mode remains a peer workspace with a scrollable transcript, inline path review and an anchored composer. Blackmagician retains project context, connection state, shooting details, questions, recent entries and the shared agent. Inputs must survive background record updates. Neither mode is a floating widget.
+Verification comes from durable completion events. Missing counts, offline reports and failures retain their real meaning. Do not invent transfer speed, ETA, thumbnails or per-destination progress. Project removal preserves originals, backups, reports and workflow records, and retains confirmation/undo. Agent and shooting modes retain their existing workflow and project context.
 
 ## Verification
 
-Run `python -m pytest orchestrator/tests` with the app's dependency-complete Python environment. `script/verify_ui_design.mjs` uses Playwright and a local test server with fixture-only API responses; it checks actual browser interaction, palette/state contrast, saved settings, breakpoint geometry, 100-path confirmations, touch sheets, errors, storage failure and low-end effects. It never starts a copy job. Screenshots and `result.json` go to `.pipeline/uiux-qa/` by default.
+Run `python -m pytest orchestrator/tests` in the dependency-complete environment. Use an isolated fixture for UI checks, with real-copy requests blocked. `script/verify_ui_design.mjs` is the standalone regression runner; this session's actual browser interactions use CUA, and the runner is syntax-checked rather than executed.
 
-Rebuild and launch the macOS app with `script/build_and_run.sh`, then verify the packaged static resources and native WebKit screen. The Run action remains connected to this script.
+Rebuild and launch through `script/build_and_run.sh --verify`. Check the actual native screen, strict code signature and packaged static-file hashes. Current work evidence lives in `.pipeline/uiux-black/` and is described in `docs/uiux-black-blurssism.md`.

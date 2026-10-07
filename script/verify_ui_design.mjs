@@ -133,12 +133,19 @@ try {
     for (const state of ['good', 'warning', 'failed', 'active']) assert.ok(await contrast(page, `.status.${state}`) >= 4.5, `${theme}/${state}`);
   }
   await page.locator('#appearanceDensity').selectOption('compact');
+  await page.locator('#appearanceCrema').selectOption('off');
   await page.locator('#appearanceForm button[type="submit"]').click();
   assert.equal(await page.locator('#content tbody tr').first().evaluate(el => el.getBoundingClientRect().height), 32);
   assert.equal(await page.locator('.mode-switch').evaluate(el => getComputedStyle(el).backdropFilter), 'none');
   await page.reload(); await page.locator('table').waitFor();
   assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
   assert.equal(await page.locator('html').getAttribute('data-density'), 'compact');
+  assert.equal(await page.locator('html').getAttribute('data-crema'), 'off');
+  for (const surface of ['.mode-switch', '.library-toolbar .tabs']) assert.equal(await page.locator(surface).evaluate(el => getComputedStyle(el).backdropFilter), 'none');
+  await settings(page);
+  await page.locator('#appearanceCrema').selectOption('auto');
+  await page.locator('#appearanceForm button[type="submit"]').click();
+  assert.equal(await page.locator('html').getAttribute('data-palette'), 'graphite');
   await page.locator('#content [data-card="ui-qa-card-0"]').click();
   await page.locator('#content [data-card="ui-qa-card-0"]').press('ArrowUp');
   assert.equal(await page.evaluate(() => document.activeElement.dataset.card), 'ui-qa-card-1');
@@ -151,13 +158,15 @@ try {
   assert.equal(Number(await page.locator('#navigatorSplitter').getAttribute('aria-valuenow')), oldWidth + 10);
   check('Keyboard selection, inspector tabs, splitters and compact rows stay usable');
   await screenshot(page, 'workspace-dark');
-  check('Two opaque themes keep actions and status text at 4.5:1', {minimumActionContrast: minimum});
-  check('Saved theme and density survive reload');
+  check('Achromatic themes keep actions and status text at 4.5:1', {minimumActionContrast: minimum});
+  check('Saved theme, density and effect settings survive reload');
 
   await settings(page);
   await page.locator('#appearanceTheme').selectOption('light');
   await screenshot(page, 'appearance');
-  assert.equal(await page.locator('.bl-crema:visible, .bl-crema-thick:visible').count(), 0);
+  assert.equal(await page.locator('.bl-crema:visible, .bl-crema-thick:visible').count(), 3);
+  assert.equal(await page.locator('.library').evaluate(el => getComputedStyle(el).backdropFilter), 'none');
+  assert.equal(await page.locator('#cardInspector').evaluate(el => getComputedStyle(el).backdropFilter), 'none');
   await page.keyboard.press('Escape');
   await page.locator('#importCard').click();
   await page.locator('#importForm input[name="source_path"]').fill('/Volumes/CAMERA_CARD');
@@ -238,6 +247,7 @@ try {
     Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 2});
   });
   await attach(restricted); await restricted.goto(url); await restricted.locator('table').waitFor();
+  assert.equal(await restricted.locator('html').getAttribute('data-crema'), 'off');
   await settings(restricted); await restricted.locator('#appearanceTheme').selectOption('dark');
   assert.ok((await restricted.locator('#appearanceStatus').textContent()).includes('저장할 수 없'));
   await restricted.keyboard.press('Escape'); await restricted.locator('#agentMode').click();
