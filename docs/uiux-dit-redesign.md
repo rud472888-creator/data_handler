@@ -59,3 +59,5 @@ Icons are unmodified Lucide Static 1.52.0 SVGs from the official npm registry. `
 - `script/verify_ui_design.mjs` was brought up to date and syntax-checked. This session's browser validation used CUA; the standalone Playwright runner was not executed.
 
 The attempted read of the running app's state API was rejected by automatic approval review under the workspace's prohibition on live progress monitoring. That query was abandoned. UI QA stayed on the isolated fixture; packaging and launch proceeded under the user's app-update authorization.
+
+Final native follow-up: Safari/AXPress can activate a button without focusing it. Dialog openers are now captured before their click handler runs. After the last rebuild, native AX activation of **카드 가져오기** followed by **Escape** restored focus to that same button. The 20 interaction checks in `interaction-checks.json` all pass.

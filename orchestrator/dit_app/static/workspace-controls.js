@@ -150,6 +150,12 @@
   // even when a refresh replaced the original project/card button.
   let lastOutsideFocus = null;
   document.addEventListener('focusin', event => { if (!event.target.closest('dialog')) lastOutsideFocus = event.target; });
+  // Safari and AXPress can activate a button without first focusing it.
+  // Capture that opener before the button's handler shows the dialog.
+  document.addEventListener('click', event => {
+    const opener = event.target.closest('button, a[href]');
+    if (opener && !opener.closest('dialog')) lastOutsideFocus = opener;
+  }, true);
   const openers = new WeakMap();
   const watched = new WeakSet();
   function watchDialogs() {
