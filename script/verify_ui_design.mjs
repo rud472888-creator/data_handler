@@ -66,7 +66,12 @@ async function contrast(page, selector) {
       const rgb = color.match(/[\d.]+/g).slice(0, 3).map(v => Number(v) / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4);
       return rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722;
     };
-    const a = luminance(style.color), b = luminance(style.backgroundColor);
+    let background = style.backgroundColor, ancestor = element;
+    while (background === 'rgba(0, 0, 0, 0)' || background === 'transparent') {
+      ancestor = ancestor.parentElement; if (!ancestor) break;
+      background = getComputedStyle(ancestor).backgroundColor;
+    }
+    const a = luminance(style.color), b = luminance(background);
     return (Math.max(a, b) + .05) / (Math.min(a, b) + .05);
   });
 }
@@ -76,7 +81,7 @@ try {
   await attach(page);
   await page.goto(url);
   await page.locator('[data-new-project]').waitFor();
-  await page.locator('#appearancePalette option').first().waitFor({state: 'attached'});
+  await page.locator('#appearanceDensity option').first().waitFor({state: 'attached'});
   assert.equal(await primaryCount(page), 1);
   await screenshot(page, 'empty-light');
   check('Empty library offers one primary action');
@@ -84,7 +89,7 @@ try {
   await page.locator('[data-new-project]').click();
   await page.locator('#projectForm input[name="name"]').fill('야간 촬영');
   await page.locator('#projectForm button[type="submit"]').click();
-  await page.locator('[data-import]').waitFor();
+  await page.locator('#importCard').waitFor({state: 'visible'});
   assert.equal(await primaryCount(page), 1);
   check('Project creation reaches the import empty state');
 
@@ -92,7 +97,7 @@ try {
   fixture.cards = phases.map((phase, index) => ({
     run_id: 'ui-qa-card-' + index, roll: 'R#' + (index + 1), shoot_date: index > 3 ? '2026-10-06' : '2026-10-07',
     camera_unit: index % 2 ? 'B' : 'A', phase, verified: index < 3, source_path: '/Volumes/CAMERA_CARD/' + (index + 1),
-    artifacts: [], updated_at: '2026-10-07T05:00:00Z', agent_reviews: index ? [] : [
+    file_count: index < 3 ? 48 + index : null, destinations: ['/Volumes/BACKUP_A/야간 촬영/001_Footage/R#' + (index + 1)], artifacts: [], updated_at: '2026-10-07T05:00:00Z', agent_reviews: index ? [] : [
       {phase: 'copy', title: '복제 검토', state: 'done', status: 'verified', summary: '원본과 두 백업 경로의 체크섬이 일치해요.', finding_count: 0},
       {phase: 'report', title: '리포트 검토', state: 'done', status: 'verified', summary: '완료 기록의 카드 정보와 보고서가 일치해요.', finding_count: 0},
     ],
@@ -104,7 +109,7 @@ try {
   assert.equal(await page.evaluate(() => document.activeElement.dataset.card), 'ui-qa-card-0');
   assert.equal(await primaryCount(page), 1);
   await page.evaluate(() => document.fonts.ready);
-  assert.ok(await page.evaluate(() => document.fonts.check('700 30px "Gowun Batang"', '야간 촬영') && document.fonts.check('400 14px "Pretendard Variable"', '카드')));
+  assert.ok(await page.evaluate(() => document.fonts.check('400 14px "Pretendard Variable"', '카드')));
   await screenshot(page, 'workspace-light');
   const header = await page.locator('.library thead').boundingBox();
   const content = await page.locator('#content').boundingBox();
@@ -112,8 +117,6 @@ try {
   check('Library, selection, review and seven operational states render with local fonts');
 
   await settings(page);
-  const ids = await page.locator('#appearancePalette option').evaluateAll(options => options.map(option => option.value));
-  assert.equal(ids.length, 13);
   await page.locator('#appearanceTheme').selectOption('system');
   await page.emulateMedia({colorScheme: 'dark', reducedMotion: 'reduce'});
   assert.equal(await page.locator('#appearanceForm button.primary').evaluate(el => getComputedStyle(el).transitionDuration), '0s');
@@ -124,32 +127,37 @@ try {
   let minimum = Infinity;
   for (const theme of ['light', 'dark']) {
     await page.locator('#appearanceTheme').selectOption(theme);
-    for (const palette of ids) {
-      await page.locator('#appearancePalette').selectOption(palette);
-      const ratio = await contrast(page, '#appearanceForm button.primary');
-      minimum = Math.min(minimum, ratio);
-      assert.ok(ratio >= 4.5, `${theme}/${palette}: ${ratio}`);
-      for (const state of ['good', 'warning', 'failed', 'active']) assert.ok(await contrast(page, `.status.${state}`) >= 4.5, `${theme}/${palette}/${state}`);
-    }
+    const ratio = await contrast(page, '#appearanceForm button.primary');
+    minimum = Math.min(minimum, ratio);
+    assert.ok(ratio >= 4.5, `${theme}: ${ratio}`);
+    for (const state of ['good', 'warning', 'failed', 'active']) assert.ok(await contrast(page, `.status.${state}`) >= 4.5, `${theme}/${state}`);
   }
-  await page.locator('#appearancePalette').selectOption('espresso');
-  await page.locator('#appearanceCrema').selectOption('off');
+  await page.locator('#appearanceDensity').selectOption('compact');
   await page.locator('#appearanceForm button[type="submit"]').click();
-  assert.equal(await page.locator('html').getAttribute('data-crema'), 'off');
+  assert.equal(await page.locator('#content tbody tr').first().evaluate(el => el.getBoundingClientRect().height), 32);
   assert.equal(await page.locator('.mode-switch').evaluate(el => getComputedStyle(el).backdropFilter), 'none');
-  await page.reload();
-  await page.locator('table').waitFor();
+  await page.reload(); await page.locator('table').waitFor();
   assert.equal(await page.locator('html').getAttribute('data-theme'), 'dark');
-  assert.equal(await page.locator('html').getAttribute('data-crema'), 'off');
+  assert.equal(await page.locator('html').getAttribute('data-density'), 'compact');
+  await page.locator('#content [data-card="ui-qa-card-0"]').click();
+  await page.locator('#content [data-card="ui-qa-card-0"]').press('ArrowUp');
+  assert.equal(await page.evaluate(() => document.activeElement.dataset.card), 'ui-qa-card-1');
+  assert.ok((await page.locator('#cardDetails').textContent()).includes('R#2'));
+  await page.locator('#detailsTab').press('ArrowRight');
+  assert.equal(await page.locator('#reviewTab').getAttribute('aria-selected'), 'true');
+  await page.locator('#reviewTab').press('ArrowLeft');
+  const oldWidth = Number(await page.locator('#navigatorSplitter').getAttribute('aria-valuenow'));
+  await page.locator('#navigatorSplitter').press('ArrowRight');
+  assert.equal(Number(await page.locator('#navigatorSplitter').getAttribute('aria-valuenow')), oldWidth + 10);
+  check('Keyboard selection, inspector tabs, splitters and compact rows stay usable');
   await screenshot(page, 'workspace-dark');
-  check('13 palettes × 2 themes keep actions and status text at 4.5:1', {minimumActionContrast: minimum});
-  check('Saved theme, palette and disabled effects survive reload');
+  check('Two opaque themes keep actions and status text at 4.5:1', {minimumActionContrast: minimum});
+  check('Saved theme and density survive reload');
 
   await settings(page);
   await page.locator('#appearanceTheme').selectOption('light');
-  await page.locator('#appearanceCrema').selectOption('on');
   await screenshot(page, 'appearance');
-  assert.ok(await page.locator('.bl-crema:visible, .bl-crema-thick:visible').count() <= 3);
+  assert.equal(await page.locator('.bl-crema:visible, .bl-crema-thick:visible').count(), 0);
   await page.keyboard.press('Escape');
   await page.locator('#importCard').click();
   await page.locator('#importForm input[name="source_path"]').fill('/Volumes/CAMERA_CARD');
@@ -231,8 +239,7 @@ try {
   });
   await attach(restricted); await restricted.goto(url); await restricted.locator('table').waitFor();
   await settings(restricted); await restricted.locator('#appearanceTheme').selectOption('dark');
-  assert.ok((await restricted.locator('#appearanceStatus').textContent()).includes('저장할 수 없어'));
-  assert.equal(await restricted.locator('html').getAttribute('data-crema'), 'off');
+  assert.ok((await restricted.locator('#appearanceStatus').textContent()).includes('저장할 수 없'));
   await restricted.keyboard.press('Escape'); await restricted.locator('#agentMode').click();
   await restricted.locator('.agent-welcome').waitFor();
   await restricted.close();

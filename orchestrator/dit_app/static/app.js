@@ -7,7 +7,8 @@ const labels = {waiting: '시작 대기', copying: '복사·체크섬 검증 중
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const project = () => state.projects.find(p => p.id === state.project);
 const tone = phase => ['reported','verified'].includes(phase) ? 'good' : phase === 'failed' ? 'failed' : phase === 'review' ? 'warning' : 'active';
-const badge = card => `<span class="status ${tone(card.phase)}">${escape(labels[card.phase] || '상태 확인 필요')}</span>`;
+const icon = name => `<span class="icon" aria-hidden="true" style="--icon:url('/workspace-static/icons/${name}.svg')"></span>`;
+const badge = card => `<span class="status ${tone(card.phase)}">${icon(['reported','verified'].includes(card.phase) ? 'check' : card.phase === 'failed' ? 'circle-x' : card.phase === 'review' ? 'triangle-alert' : 'clock-3')}${escape(labels[card.phase] || '상태 확인 필요')}</span>`;
 const dateTime = value => value ? new Date(value).toLocaleString('ko-KR') : '기록 없음';
 let renderedProject = undefined;
 const pickerFields = new Map();
@@ -20,6 +21,8 @@ function attachPathChooser(field, container = field.parentElement) {
   if (window.webkit?.messageHandlers?.pathChooser) {
     const button = document.createElement('button');
     button.type = 'button'; button.textContent = '폴더 선택';
+    button.dataset.pathChooser = '';
+    button.setAttribute('aria-label', `${field.labels?.[0]?.textContent.trim() || '폴더'} 선택`);
     button.onclick = () => { const requestId = crypto.randomUUID(); pickerFields.set(requestId,field); window.webkit.messageHandlers.pathChooser.postMessage({requestId,currentPath:field.value}); };
     container.append(button);
   }
@@ -33,6 +36,7 @@ function updateReplicaRows() {
     const remove = row.querySelector('[data-remove-replica]');
     remove.disabled = rows.length === 1;
     remove.setAttribute('aria-label', `백업 경로 ${index + 1} 삭제`);
+    row.querySelector('[data-path-chooser]')?.setAttribute('aria-label', `백업 경로 ${index + 1} 폴더 선택`);
   });
   $('replicaCount').textContent = `${rows.length}개 경로`;
 }
@@ -62,7 +66,7 @@ async function api(path, data) {
   return result;
 }
 function error(id, message) { $(id).textContent = message || ''; $(id).hidden = !message; }
-function empty(title, body, button = '') { return `<div class="empty"><h2>${title}</h2><p>${body}</p>${button}</div>`; }
+function empty(title, body, button = '') { return `<div class="empty">${icon('folder')}<h2>${title}</h2><p>${body}</p>${button}</div>`; }
 function visibleCards() { return state.cards.filter(c => (!state.day || c.shoot_date === state.day) && `${c.roll} ${c.camera_unit} ${c.source_path}`.toLowerCase().includes(state.search.toLowerCase())); }
 function pdfs(card) { return card.artifacts.filter(a => a.kind === 'pdf' || /\.pdf$/i.test(a.path)); }
 function artifactLink(a) {
@@ -75,23 +79,24 @@ function render() {
   const focused = document.activeElement;
   const focusKey = ['project', 'day', 'card'].find(key => focused?.dataset && key in focused.dataset);
   const focusAnchor = focusKey ? {key: focusKey, value: focused.dataset[focusKey], container: focused.closest('#projects, #days, #content, #queue')?.id} : null;
-  $('projects').innerHTML = state.projects.length ? state.projects.map(p => `<button data-project="${escape(p.id)}" aria-current="${p.id === state.project}">${escape(p.name)}</button>`).join('') : '<p class="muted">등록된 프로젝트 없음</p>';
+  $('projects').innerHTML = state.projects.length ? state.projects.map(p => `<button data-project="${escape(p.id)}" aria-current="${p.id === state.project}">${icon('folder')}<span>${escape(p.name)}</span></button>`).join('') : '<p class="muted">등록된 프로젝트 없음</p>';
   const days = [...new Set(state.cards.map(c => c.shoot_date))].sort().reverse();
   $('dayHeading').hidden = !days.length;
-  $('days').innerHTML = days.length ? `<button data-day="" aria-current="${!state.day}">전체 촬영일</button>${days.map(d => `<button data-day="${escape(d)}" aria-current="${d === state.day}">${escape(d)} <span class="muted">${state.cards.filter(c => c.shoot_date === d).length}</span></button>`).join('')}` : '';
+  $('days').innerHTML = days.length ? `<button data-day="" aria-current="${!state.day}"><span class="nav-label">${icon('layers')}전체 촬영일</span><span class="nav-count">${state.cards.length}</span></button>${days.map(d => `<button data-day="${escape(d)}" aria-current="${d === state.day}"><span class="nav-label">${icon('calendar-days')}${escape(d)}</span><span class="nav-count">${state.cards.filter(c => c.shoot_date === d).length}</span></button>`).join('')}` : '';
   $('projectTitle').textContent = project()?.name || '프로젝트 라이브러리';
-  $('projectSubtitle').textContent = project() ? (state.day || '전체 촬영일') + ' · 카드와 검증 기록' : '프로젝트를 만들고 촬영 카드를 관리해요.';
+  $('projectSubtitle').textContent = project() ? (state.day || '전체 촬영일') + ` · 카드 ${state.cards.length}개` : '프로젝트를 선택하거나 새로 만드세요.';
   $('importCard').disabled = !project();
-  $('importCard').hidden = !project() || !state.cards.length;
+  $('importCard').hidden = !project();
   document.querySelector('.toolbar-actions').hidden = !project();
   $('removeProject').disabled = !project();
   $('libraryTab').setAttribute('aria-pressed', state.tab === 'library');
   $('reportsTab').setAttribute('aria-pressed', state.tab === 'reports');
   const cards = visibleCards();
+  if (!cards.some(card => card.run_id === state.selected)) state.selected = cards[0]?.run_id || null;
   if (state.loading) $('content').innerHTML = empty('기록을 불러오는 중', '프로젝트의 카드와 완료 기록을 확인하고 있습니다.');
-  else if (!project()) $('content').innerHTML = empty('촬영 프로젝트부터 시작해요', '카드, 복사본과 리포트를 한 프로젝트에 모아 관리해요. 디스크는 카드를 가져올 때 연결해 주세요.', '<button class="primary" data-new-project>새 프로젝트 만들기</button>');
-  else if (!state.cards.length) $('content').innerHTML = empty('첫 번째 카드를 가져와 주세요', '원본 카드와 백업 경로를 선택해 주세요. 복사·체크섬 검증 결과와 PDF 리포트를 이곳에서 확인할 수 있어요.', '<button class="primary" data-import>카드 가져오기</button>');
-  else if (!cards.length) $('content').innerHTML = empty('일치하는 카드가 없어요', '검색어를 바꾸거나 다른 촬영일을 선택해 주세요.');
+  else if (!project()) $('content').innerHTML = empty('프로젝트 라이브러리', '촬영 프로젝트를 만들고 카드의 복사·검증 결과를 관리하세요.', '<button class="primary" data-new-project>새 프로젝트 만들기</button>');
+  else if (!state.cards.length) $('content').innerHTML = empty('등록된 카드가 없습니다', '상단의 카드 가져오기에서 원본과 백업 경로를 지정하세요. 완료된 카드와 검증 리포트가 여기에 표시됩니다.');
+  else if (!cards.length) $('content').innerHTML = empty('일치하는 카드가 없습니다', '검색어를 바꾸거나 다른 촬영일을 선택하세요.');
   else if (state.tab === 'reports') {
     const reportDays = [...new Set(cards.map(c => c.shoot_date))].sort().reverse();
     const dayRows = reportDays.map(d => {
@@ -101,11 +106,11 @@ function render() {
     });
     const rows = cards.flatMap(c => pdfs(c).map(a => `<div class="report-row"><div><strong>${escape(c.roll)}</strong><small>${escape(c.shoot_date)} / 카메라 ${escape(c.camera_unit)}</small></div>${artifactLink(a)}</div>`));
     $('content').innerHTML = dayRows.join('') + (state.reportNotice ? `<p class="muted report-notice" role="status">${escape(state.reportNotice)}</p>` : '') + (rows.join('') || empty('카드 PDF가 아직 없습니다', '완료 기록에 리포트가 등록되면 이곳에서 열 수 있습니다. 작업 상태와 에이전트 검토에서 결과를 확인하세요.'));
-  } else $('content').innerHTML = `<table><thead><tr><th>카드 · 촬영일</th><th>카메라</th><th>작업 상태</th><th>체크섬</th></tr></thead><tbody>${cards.map(c => `<tr class="${c.run_id === state.selected ? 'selected' : ''}"><td data-label="카드"><button data-card="${escape(c.run_id)}" aria-pressed="${c.run_id === state.selected}" aria-label="${escape(c.roll)} 카드 선택">${escape(c.roll)}</button><small>${escape(c.shoot_date)}</small></td><td data-label="카메라">${escape(c.camera_unit)}</td><td data-label="작업 상태">${badge(c)}</td><td data-label="체크섬"><span class="${c.verified ? 'good' : 'muted'}">${c.verified ? '검증 완료' : '미확인'}</span></td></tr>`).join('')}</tbody></table>`;
+  } else $('content').innerHTML = `<table aria-label="촬영 카드와 작업 기록"><thead><tr><th scope="col">카드</th><th scope="col">촬영일</th><th scope="col">카메라</th><th scope="col" class="number-cell">파일</th><th scope="col">작업 상태</th><th scope="col">원본 폴더</th></tr></thead><tbody>${cards.map(c => `<tr class="${c.run_id === state.selected ? 'selected' : ''}"><td data-label="카드"><button data-card="${escape(c.run_id)}" aria-pressed="${c.run_id === state.selected}" aria-label="${escape(c.roll)} 카드 선택">${escape(c.roll)}</button></td><td data-label="촬영일">${escape(c.shoot_date)}</td><td data-label="카메라">${escape(c.camera_unit)}</td><td data-label="파일" class="number-cell">${c.file_count == null ? '<span aria-hidden="true">—</span><span class="sr-only">완료 기록 없음</span>' : Number(c.file_count).toLocaleString('ko-KR')}</td><td data-label="작업 상태">${badge(c)}</td><td data-label="원본 폴더" class="source-cell" title="${escape(c.source_path)}">${escape(c.source_path.split('/').filter(Boolean).pop() || c.source_path)}</td></tr>`).join('')}</tbody></table>`;
   $('librarySummary').textContent = `카드 ${cards.length}개 · 검증 완료 ${cards.filter(c => c.verified).length}개`;
   document.dispatchEvent(new CustomEvent('dit-card-selected', {detail:{card:state.cards.find(c => c.run_id === state.selected)}}));
   const active = state.cards.filter(c => ['waiting','copying','reporting','review','failed'].includes(c.phase));
-  $('queue').innerHTML = active.length ? active.map(c => `<div class="queue-row"><button data-card="${escape(c.run_id)}">${escape(c.roll)}</button>${badge(c)}<span class="muted">마지막 작업 기록 ${escape(dateTime(c.updated_at))}</span></div>`).join('') : '<p>진행 중이거나 확인이 필요한 작업이 없습니다.</p>';
+  $('queue').innerHTML = active.length ? active.map(c => `<div class="queue-row"><button data-card="${escape(c.run_id)}" aria-label="${escape(c.roll)} 작업 기록 선택">${escape(c.roll)}</button>${badge(c)}<span class="queue-context">${escape(c.shoot_date)} · 카메라 ${escape(c.camera_unit)}</span><span class="muted">${escape(dateTime(c.updated_at))}</span></div>`).join('') : '<p>진행 중이거나 확인이 필요한 작업이 없습니다.</p>';
   if (renderedProject !== state.project) {
     renderedProject = state.project;
     document.dispatchEvent(new CustomEvent('dit-project-changed', {detail:{projectId:state.project}}));
@@ -141,7 +146,7 @@ async function refresh() {
 async function volumes() {
   try {
     const data = await api('/api/disks');
-    $('volumes').innerHTML = data.disks.length ? data.disks.map(d => `<div class="volume">${escape(d.name || d.label || d.path)}<small>${escape(d.path || d.mount_point || '')}</small></div>`).join('') : '<p class="muted">연결된 외장 볼륨 없음</p>';
+    $('volumes').innerHTML = data.disks.length ? data.disks.map(d => `<div class="volume">${icon('hard-drive')}<span>${escape(d.name || d.label || d.path)}</span><small>${escape(d.path || d.mount_point || '')}</small></div>`).join('') : '<p class="muted">연결된 외장 볼륨 없음</p>';
   } catch (e) { $('volumes').textContent = `볼륨 조회 실패: ${e.message}`; }
 }
 function openProject() { $('projectForm').reset(); error('projectError',''); $('projectDialog').showModal(); }
@@ -163,7 +168,7 @@ async function openImport() {
 }
 function openPdf(url, heading = 'PDF 리포트') {
   const dialog = document.createElement('dialog');
-  dialog.className = 'pdf-dialog bl-crema-thick'; dialog.setAttribute('aria-label', `${heading} 미리보기`);
+  dialog.className = 'pdf-dialog'; dialog.setAttribute('aria-label', `${heading} 미리보기`);
   const header = document.createElement('header');
   const title = document.createElement('h2'); title.textContent = heading;
   const close = document.createElement('button'); close.textContent = '닫기'; close.onclick = () => dialog.close();
@@ -193,7 +198,10 @@ document.addEventListener('click', e => {
   if ('import' in button.dataset) openImport();
   if ('project' in button.dataset) { state.project = button.dataset.project; state.cards = []; state.dayReports = {}; state.reportNotice = ''; state.day = ''; state.selected = null; state.loading = true; remember(state.project); render(); refresh(); }
   if ('day' in button.dataset) { state.day = button.dataset.day; render(); }
-  if ('card' in button.dataset) { state.selected = button.dataset.card; render(); }
+  if ('card' in button.dataset) {
+    if (button.closest('#queue')) { state.day = ''; state.search = ''; $('search').value = ''; state.tab = 'library'; }
+    state.selected = button.dataset.card; render();
+  }
 });
 $('newProject').onclick = openProject;
 $('importCard').onclick = openImport;
@@ -236,7 +244,7 @@ $('importForm').onsubmit = async e => {
   }
 };
 refresh(); volumes();
-const idle = () => !document.hidden && !$('importDialog').open && !$('projectDialog').open && !$('removeDialog').open && !document.querySelector('.pdf-dialog[open]');
+const idle = () => !document.hidden && !document.querySelector('dialog[open]');
 setInterval(() => { if (idle()) refresh(); }, 10000);
 document.addEventListener('visibilitychange', () => { if (idle()) refresh(); });
 

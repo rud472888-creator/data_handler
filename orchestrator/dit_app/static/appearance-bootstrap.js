@@ -1,15 +1,14 @@
-/* Apply saved colors before CSS paints. Storage may be unavailable in a webview. */
+/* Apply saved workspace preferences before first paint, including in WKWebView. */
 (() => {
   let saved;
-  try { saved = JSON.parse(localStorage.getItem('dit-appearance')); } catch {}
+  try { saved = JSON.parse(localStorage.getItem('dit-workspace-appearance')); } catch {}
   const preferences = {
-    theme: ['light', 'dark'].includes(saved?.theme) ? saved.theme : 'system',
-    palette: typeof saved?.palette === 'string' && /^[a-z]{2,12}$/.test(saved.palette) ? saved.palette : 'espresso',
-    crema: ['on', 'off'].includes(saved?.crema) ? saved.crema : 'auto',
+    theme: ['dark', 'light', 'system'].includes(saved?.theme) ? saved.theme : 'dark',
+    density: saved?.density === 'compact' ? 'compact' : 'standard',
   };
-  const root = document.documentElement;
-  if (preferences.theme !== 'system') root.dataset.theme = preferences.theme;
-  root.dataset.palette = preferences.palette;
-  root.dataset.crema = preferences.crema === 'off' ? 'off' : 'on';
+  const resolved = preferences.theme === 'system'
+    ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : preferences.theme;
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.dataset.density = preferences.density;
   window.DataHandlerAppearance = preferences;
 })();

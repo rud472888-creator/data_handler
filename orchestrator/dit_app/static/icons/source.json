@@ -1,0 +1,29 @@
+{
+  "package": "lucide-static",
+  "version": "1.52.0",
+  "source": "https://www.npmjs.com/package/lucide-static",
+  "license": "ISC; MIT for Feather-derived icons (see LICENSE)",
+  "files": {
+    "triangle-alert.svg": "862a3389768d53f7fc9eb2bfff7e55c5ed07345dbbfe20673fbc9eee6b55ee24",
+    "search.svg": "2ff2c77f3f36bcde71f5d979728d2df4e193201cdad5f8ee3c133e4a1a342074",
+    "list.svg": "f43417ab174dfa43a990aec47571036b3e3fdf08f7b6de5aa1ffc64b394b7db9",
+    "clapperboard.svg": "1edf0e1160ef7f48c2d2129fb36ae5aaf1b4b54b81cae7afe0261c50e6b2a351",
+    "file-text.svg": "f29818c0194be22f75102aa90440f38e1795a355b46359f13c4c85c9f9da0ed8",
+    "x.svg": "b87f5d4decd163091eafb76bb8d9d9fa8dd7b997aa0e186d920218bd084bb60d",
+    "refresh-cw.svg": "60f02adce4aae6849438fadbb466b2c5355e660bd9c95c0057a42e1aa63c2892",
+    "chevron-right.svg": "f24285f7456e2738daf3c1e960b618ed4a5603d883da989a45fbac1613bb1660",
+    "layers.svg": "e32240934e1892253a57db602cd1abf5ea3b0d668fe578a96f7a7af92fac69d5",
+    "bot.svg": "00b9d5d91b6f6255642112816dd1f591044489c9a781ba80c2fb1c87628ff3f9",
+    "settings-2.svg": "b1dfbc5bdc8c72d93225c73939b779fdcc3489baa933e3b911bea6f42486776f",
+    "plus.svg": "336c701fdc14ec51205606c65e680f8aade68a8173909f12040b72fc26e5ae9f",
+    "check.svg": "97a72209deb061b1bae237dd92b49a88ffd61e8139a3bd15cd7c093162dee2b0",
+    "hard-drive.svg": "ec10a72dc68fb09e7342d92b5620f4bf48ee46f42a955c3d5a12225f7e6814af",
+    "arrow-down-to-line.svg": "2e0ee265400482ad47dd011a467abee795b6ed548ee667db4c54d0874e909886",
+    "panel-left.svg": "783c5700d33a7d800e763f4ccbaa65d33ea40c55f7acb7bbf3ab4a39d4d4ecab",
+    "circle-x.svg": "858ff63df686285305e9bacd60e547ca7bf98d35d946a879c3c3c1ad50bdb3ab",
+    "clock-3.svg": "9bf7b3cd3404d666950c33f1c1cce0d751c0e9e19d9b935375609425857fa507",
+    "panel-right.svg": "392148ebcf4dd85bd514c07053340fd0889860134b0faafdb5a85b8986d283f6",
+    "folder.svg": "7d9e20d62e5f45c5cc30e0c16ba69b04c52e8754a55692d57408468adfda1b3b",
+    "calendar-days.svg": "4ee9263771cc7cd153bfd99c59ba6b3291c972bd608c81f6f2cf7861b44f4d4b"
+  }
+}

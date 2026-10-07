@@ -35,21 +35,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     private func createWindow() {
         let configuration = WKWebViewConfiguration()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
+        configuration.preferences.tabFocusesLinks = true
         configuration.websiteDataStore = .default()
         configuration.userContentController.add(self, name: "pathChooser")
+        configuration.userContentController.add(self, name: "appearance")
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = self
+        webView.underPageBackgroundColor = NSColor.windowBackgroundColor
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
+            contentRect: NSRect(x: 0, y: 0, width: 1300, height: 840),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         window.center()
         window.title = appName
-        window.minSize = NSSize(width: 1100, height: 760)
+        window.minSize = NSSize(width: 1000, height: 700)
+        window.appearance = NSAppearance(named: .darkAqua)
         window.contentView = webView
         window.makeKeyAndOrderFront(nil)
 
@@ -58,6 +62,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        // Accept appearance messages only from the local app's main frame.
+        if message.name == "appearance" {
+            guard message.frameInfo.isMainFrame,
+                  message.frameInfo.request.url?.host == "127.0.0.1",
+                  let payload = message.body as? [String: Any],
+                  let theme = payload["theme"] as? String else { return }
+            switch theme {
+            case "dark": window?.appearance = NSAppearance(named: .darkAqua)
+            case "light": window?.appearance = NSAppearance(named: .aqua)
+            case "system": window?.appearance = nil
+            default: return
+            }
+            return
+        }
         guard message.name == "pathChooser",
               let payload = message.body as? [String: Any],
               let requestId = payload["requestId"] as? String
