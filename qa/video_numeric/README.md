@@ -9,7 +9,7 @@ Imajev 연동, 카메라 RAW 디코더, 센서 불량 확정 검사, 학습 모�
 
 ## 설치 및 실행
 
-Python 3.10+, FFmpeg/ffprobe, NumPy, Pillow가 필요합니다. FFmpeg와 ffprobe가 PATH에 있어야 합니다. 의존성은 requirements.txt에 있습니다.
+Python 3.10+, FFmpeg/ffprobe 5.1+, NumPy, Pillow가 필요합니다. FFmpeg와 ffprobe가 PATH에 있어야 합니다. 의존성은 requirements.txt에 있습니다.
 
 ```sh
 cd qa/video_numeric  # 저장소 루트 기준
@@ -17,7 +17,7 @@ python -m pip install -r requirements.txt
 python video_qa.py "input.mov" --out "qa_result"
 python video_qa.py "input.mov" --out "pixel_result" --modules pixels --pixel-delta 0.25 --min-frames 8 --min-seconds 0.2
 python video_qa.py "input.mov" --out "clip_result" --modules clipping --threshold-preset endpoints --shadow-threshold 0.01 --highlight-threshold 0.99
-python -m unittest -v
+python -m unittest discover -v
 ```
 
 출력 폴더는 새 경로여야 합니다. 기존 폴더를 덮어쓰지 않습니다. 입력 파일은 읽기만 하며 subprocess는 shell 없이 인수 배열로 호출합니다. 종료 코드 0은 해당 실행의 처리가 완료됐다는 뜻이지, 영상 품질 합격 판정이 아닙니다. 실패/부분 실패는 2입니다. 처리 중 문제가 나면 가능한 경우 report.json에 partial_failure와 실제 처리 프레임 수를 남깁니다. 프로브 자체 실패나 경로 검증 실패는 출력 폴더 생성 전 종료할 수 있습니다.
@@ -54,13 +54,13 @@ FFmpeg로 첫 번째 비디오 스트림을 RGB48LE, full-range 출력으로 변
 - bright/dark_persistence.png: 모든 국소 잔차 후보의 프레임 점유 비율 히트맵. 지속 조건으로 필터된 확정 결함 지도가 아닙니다.
 - shadow/highlight_occupancy.png: ANY 채널 임계값 점유 비율 히트맵
 - *.npy: 픽셀별 수치 맵. *_candidate_frame_fraction은 전체 분석 프레임 대비 잔차 후보 비율, *_longest_run_seconds는 지속 기준 미달을 포함한 최장 연속 초, shadow/highlight_frame_fraction은 ANY 점유 비율
-- evidence/*.png: 최대 max-crops개 8비트 미리보기 원본 크롭. x/y 및 crop_xyxy는 report.json에서 확인. 후보/클리핑을 처음 관찰한 일부 예시이며 심각도 순위가 아닙니다.
+- evidence/*.png: 최대 max-crops개 8비트 미리보기 원본 크롭. 활성 종류(bright, dark, shadow, highlight)에 한도를 균등 예약하므로 먼저 나온 종류가 나중 종류의 몫을 소진하지 않습니다. 나머지는 위 순서로 배분하며 사용하지 않은 몫은 재분배하지 않습니다. 한도가 종류 수보다 작으면 일부 종류의 몫이 0일 수 있습니다. report.json의 evidence_quotas에 실제 배분을 기록합니다. x/y 및 crop_xyxy는 report.json에서 확인. 후보/클리핑을 처음 관찰한 일부 예시이며 심각도 순위가 아닙니다.
 
 좌표 원점은 좌상단, 프레임 번호는 0부터, 구간은 [시작, 종료)입니다. CSV 시간은 소스 PTS이므로 반드시 0에서 시작하지 않습니다. 회전 태그는 자동 적용하지 않습니다. VFR은 ffprobe의 실제 프레임 PTS를 사용하고 마지막 프레임은 packet duration 또는 명시된 nominal FPS로 종료를 추정합니다. PTS가 누락/역행하면 nominal FPS를 쓸 수 있으나 횟수와 경고를 기록합니다. 쓸 FPS도 없으면 실패합니다. VFR의 맵 비율과 평균 면적은 **프레임 가중치**이며 시간 가중치가 아닙니다.
 
 ## 범위와 자원
 
-전체 프레임을 저장하지 않습니다. 디코더 프레임 2개, 고정 크기 누적 맵과 작업 배열을 유지하며, 주변 중앙값은 128행 블록으로 처리합니다. 메모리는 영상 길이가 아니라 해상도에 비례하지만 고해상도에서는 상당할 수 있습니다. CSV 파일 크기는 길이/검출 횟수에 비례합니다. ffmpeg 디코딩과 ffprobe 타임스탬프 추출이 각각 스트림을 읽으므로 실시간 처리 속도를 보장하지 않습니다. 긴 영상은 먼저 대표 구간으로 성능을 확인하세요.
+전체 프레임을 저장하지 않습니다. 디코더 프레임 2개, 고정 크기 누적 맵과 작업 배열을 유지하며, 주변 중앙값은 128행 블록과 정확한 8입력 정렬 네트워크로 처리합니다. 기존 np.median과 같은 두 가운데 값의 평균을 쓰며 uint16 덧셈 오버플로를 피합니다. 메모리는 영상 길이가 아니라 해상도에 비례하지만 고해상도에서는 상당할 수 있습니다. CSV 파일 크기는 길이/검출 횟수에 비례합니다. ffmpeg 디코딩과 ffprobe 타임스탬프 추출이 각각 스트림을 읽으므로 실시간 처리 속도를 보장하지 않습니다. 긴 영상은 먼저 대표 구간으로 성능을 확인하세요.
 
 중간 해상도 변경은 지원하지 않고 부분 실패 처리합니다. 첫 비디오 스트림만 검사합니다. 디코딩 오류나 선언된 프레임 수 불일치를 정상 완료로 처리하지 않습니다. 단, 컨테이너가 오류 없이 짧게 끝나고 원래 프레임 수가 알려져 있지 않다면 누락을 항상 알아낼 수는 없습니다. 손상 영상의 모든 형태를 검출한다는 보장은 없습니다. 강제 종료/디스크 부족 시 최종 보고서 생성이 보장되지 않습니다.
 
@@ -73,3 +73,19 @@ python video_qa.py sample_source.mkv --out sample_output --min-frames 5 --min-se
 ```
 
 내장 unittest는 지속/일시 후보, 정지 물체 오탐 모호함, 채널 차이/면적, 지속 시간, 증거 이미지, 입력 불변, 덮어쓰기 거부와 없는 입력 실패를 검증합니다. 별도의 독립 검증 결과는 VALIDATION.md에 기록합니다. 실제 촬영물에 대한 정확도/재현율을 검증한 버전은 아닙니다.
+
+
+## 리뷰 수정판 검증 및 통합 범위
+
+저장소 루트에서도 다음으로 QA 회귀 테스트를 실행할 수 있습니다.
+
+```sh
+python -m unittest discover -s qa/video_numeric -v
+python -m unittest qa.video_numeric.test_video_qa qa.video_numeric.test_regressions -v
+python -m pytest qa/video_numeric orchestrator/tests
+python -m qa.video_numeric.benchmark_residual --width 1920 --height 1080 --repeats 5
+```
+
+orchestrator만 지정하는 기존 테스트 명령은 이 독립 QA 테스트를 포함하지 않습니다. 위 결합 명령을 명시적으로 실행하세요. 런 상태/events/UI 및 별도 visual_qa 모듈과의 통합은 이 PR 범위에 포함되지 않습니다. 모든 프레임 분석, 기본 임계값과 채널 OR 판정은 유지합니다. 약한 결함이나 압축으로 퍼진 결함의 실촬영 재현율은 아직 미검증이며 임계값 최적화 결과로 해석하지 마세요.
+
+FFmpeg/ffprobe는 `-v error`로 실행하므로 일반 경고는 오류 로그에 포함되지 않습니다. 출력된 오류 로그와 비정상 종료는 보수적으로 실패 처리합니다. 프레임 중복/드롭 방지에는 `-fps_mode passthrough`를 사용합니다.

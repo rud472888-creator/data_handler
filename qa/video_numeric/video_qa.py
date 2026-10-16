@@ -29,13 +29,40 @@ def fps_of(stream):
     return None
 
 
+MEDIAN_NETWORK = (
+    (0, 1), (2, 3), (4, 5), (6, 7),
+    (0, 2), (1, 3), (4, 6), (5, 7), (1, 2), (5, 6),
+    (0, 4), (3, 7), (1, 5), (2, 6),
+    (1, 4), (3, 6), (2, 4), (3, 5), (3, 4),
+)
+
+
+def evidence_quotas(limit, modules):
+    """Reserve each enabled kind a share; the total never exceeds limit."""
+    kinds = []
+    if modules != 'clipping':
+        kinds.extend(('bright', 'dark'))
+    if modules != 'pixels':
+        kinds.extend(('shadow', 'highlight'))
+    share, remainder = divmod(limit, len(kinds))
+    return {kind: share + (index < remainder) for index, kind in enumerate(kinds)}
+
+
 def neighborhood_residual(rgb):
     """Per-channel center minus median of eight neighbors; outer border is excluded."""
     bright=np.zeros(rgb.shape[:2],np.float32); dark=bright.copy()
     for y in range(1,rgb.shape[0]-1,128):
         stop=min(y+128,rgb.shape[0]-1)
         neighbors=np.stack([rgb[y+dy:stop+dy,1+dx:rgb.shape[1]-1+dx] for dy in (-1,0,1) for dx in (-1,0,1) if (dy,dx)!=(0,0)])
-        residual=(rgb[y:stop,1:-1].astype(np.float32)-np.median(neighbors,axis=0))/65535.0
+        # Exact eight-input sorting network. Keep the even median in float64,
+        # matching np.median(uint16) without overflow or threshold drift.
+        scratch = np.empty_like(neighbors[0])
+        for left, right in MEDIAN_NETWORK:
+            np.minimum(neighbors[left], neighbors[right], out=scratch)
+            np.maximum(neighbors[left], neighbors[right], out=neighbors[right])
+            neighbors[left] = scratch
+        median = (neighbors[3].astype(np.float64) + neighbors[4]) * 0.5
+        residual=(rgb[y:stop,1:-1].astype(np.float32)-median)/65535.0
         bright[y:stop,1:-1]=np.max(residual,axis=2)
         dark[y:stop,1:-1]=np.max(-residual,axis=2)
     return bright,dark
@@ -48,6 +75,7 @@ class PixelTrack:
         self.start=np.zeros(shape,np.float64); self.start_frame=np.zeros(shape,np.int64)
         self.longest=np.zeros(shape,np.float32); self.eligible=np.zeros(shape,bool)
         self.events=0
+        self.cropped=set()
     def finish(self,mask,end):
         qualified=mask & (self.run>=self.min_frames) & ((end-self.start+1e-9)>=self.min_seconds)
         ys,xs=np.nonzero(qualified)
@@ -122,9 +150,12 @@ def main(argv=None):
     clipcounts={k:np.zeros((h,w),np.uint32) for k in ('shadow','highlight')} if args.modules!='pixels' else {}
     if args.modules!='clipping': tracks=[PixelTrack((h,w),k,pixelwriter,args.min_frames,args.min_seconds) for k in ('bright','dark')]
     errors=[]; clip_evidence=set(); clip_summary={}
+    crop_quotas=evidence_quotas(args.max_crops,args.modules)
+    crop_used={kind:0 for kind in crop_quotas}
+    report['evidence_quotas']=crop_quotas
     with tempfile.TemporaryFile() as decode_errors, tempfile.TemporaryFile() as timestamp_errors:
         try:
-            decoder=subprocess.Popen(['ffmpeg','-v','error','-nostdin','-noautorotate','-i',str(source),'-map','0:v:0','-an','-sn','-dn','-vf','scale=in_range=auto:out_range=full','-vsync','0','-pix_fmt','rgb48le','-f','rawvideo','pipe:1'],stdout=subprocess.PIPE,stderr=decode_errors);processes.append(decoder)
+            decoder=subprocess.Popen(['ffmpeg','-v','error','-nostdin','-noautorotate','-i',str(source),'-map','0:v:0','-an','-sn','-dn','-vf','scale=in_range=auto:out_range=full','-fps_mode','passthrough','-pix_fmt','rgb48le','-f','rawvideo','pipe:1'],stdout=subprocess.PIPE,stderr=decode_errors);processes.append(decoder)
             timestamps=subprocess.Popen(['ffprobe','-v','error','-select_streams','v:0','-show_frames','-show_entries','frame=media_type,width,height,best_effort_timestamp_time,pkt_duration_time','-of','compact=p=0:nk=0',str(source)],stdout=subprocess.PIPE,stderr=timestamp_errors,text=True);processes.append(timestamps)
             def next_frame():
                 nonlocal previous_t
@@ -162,9 +193,8 @@ def main(argv=None):
                         candidate=residual>=args.pixel_delta
                         candidate[0,:]=False;candidate[-1,:]=False;candidate[:,0]=False;candidate[:,-1]=False
                         qualified=tracker.update(candidate,n,t,end)
-                        if crop_count<args.max_crops:
+                        if crop_used[tracker.kind]<crop_quotas[tracker.kind]:
                             # One crop per kind/frame; suppress repeated coordinates across frames.
-                            if not hasattr(tracker,'cropped'):tracker.cropped=set()
                             ys,xs=np.nonzero(qualified)
                             for y,x in zip(ys,xs):
                                 if (int(y),int(x)) in tracker.cropped:continue
@@ -172,7 +202,7 @@ def main(argv=None):
                                 box=[max(0,int(x)-r),max(0,int(y)-r),min(w,int(x)+r+1),min(h,int(y)+r+1)]
                                 name=f'evidence/{crop_count:03d}_{tracker.kind}_f{n}_x{x}_y{y}.png'
                                 Image.fromarray((rgb[box[1]:box[3],box[0]:box[2]]>>8).astype('uint8')).save(out/name)
-                                report['evidence'].append({'file':name,'kind':tracker.kind,'frame':n,'pts_seconds':t,'x':int(x),'y':int(y),'crop_xyxy':box});crop_count+=1;break
+                                report['evidence'].append({'file':name,'kind':tracker.kind,'frame':n,'pts_seconds':t,'x':int(x),'y':int(y),'crop_xyxy':box});crop_count+=1;crop_used[tracker.kind]+=1;break
                 for kind,threshold in (('shadow',shadow),('highlight',highlight)) if clipcounts else []:
                     mask=(rgb.astype(np.float32)/65535<=threshold) if kind=='shadow' else (rgb.astype(np.float32)/65535>=threshold)
                     anymask=np.any(mask,axis=2);clipcounts[kind]+=anymask
@@ -183,12 +213,12 @@ def main(argv=None):
                         clipwriter.writerow([n,t,end,kind,channel,count,coverage]+bbox);key=(kind,channel)
                         summary=clip_summary.setdefault(kind+'_'+channel,{'pixel_frame_count':0,'peak_coverage_fraction':0})
                         summary['pixel_frame_count']+=count;summary['peak_coverage_fraction']=max(summary['peak_coverage_fraction'],coverage)
-                        if channel=='ANY' and count and kind not in clip_evidence and crop_count<args.max_crops:
+                        if channel=='ANY' and count and kind not in clip_evidence and crop_used[kind]<crop_quotas[kind]:
                             clip_evidence.add(kind);y=int(ys[0]);x=int(np.flatnonzero(m[y])[0]);r=args.crop_radius
                             box=[max(0,x-r),max(0,y-r),min(w,x+r+1),min(h,y+r+1)]
                             name=f'evidence/{crop_count:03d}_{kind}_f{n}_x{x}_y{y}.png'
                             Image.fromarray((rgb[box[1]:box[3],box[0]:box[2]]>>8).astype('uint8')).save(out/name)
-                            report['evidence'].append({'file':name,'kind':kind,'frame':n,'pts_seconds':t,'x':x,'y':y,'crop_xyxy':box});crop_count+=1
+                            report['evidence'].append({'file':name,'kind':kind,'frame':n,'pts_seconds':t,'x':x,'y':y,'crop_xyxy':box});crop_count+=1;crop_used[kind]+=1
                         if count>=args.clip_min_pixels:
                             if key not in clipping_states:clipping_states[key]=[n,t,coverage]
                             clipping_states[key][2]=max(clipping_states[key][2],coverage)

@@ -1,7 +1,10 @@
 import csv, json, subprocess, sys, tempfile, unittest
 from pathlib import Path
 import numpy as np
-from video_qa import neighborhood_residual
+if __package__:
+    from .video_qa import neighborhood_residual
+else:
+    from video_qa import neighborhood_residual
 HERE=Path(__file__).parent
 
 def fixture(path):
