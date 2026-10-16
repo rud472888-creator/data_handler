@@ -1,0 +1,7 @@
+__pycache__/
+*.py[cod]
+.venv/
+qa_result/
+pixel_result/
+clip_result/
+sample_output/
