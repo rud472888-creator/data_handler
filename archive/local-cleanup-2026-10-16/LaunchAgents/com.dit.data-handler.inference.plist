@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>DATA_HANDLER_PIPELINE_ROOT</key>
+		<string>/Users/ijaegyeong/Library/Application Support/Data Handler/.pipeline</string>
+		<key>HF_HUB_OFFLINE</key>
+		<string>1</string>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>PYTHONDONTWRITEBYTECODE</key>
+		<string>1</string>
+		<key>PYTHONPATH</key>
+		<string>/Users/ijaegyeong/Documents/data_handler</string>
+		<key>TRANSFORMERS_OFFLINE</key>
+		<string>1</string>
+	</dict>
+	<key>KeepAlive</key>
+	<true/>
+	<key>Label</key>
+	<string>com.dit.data-handler.inference</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/ijaegyeong/Documents/data_handler/.pipeline/agent-venv/bin/python</string>
+		<string>-m</string>
+		<string>orchestrator.agent</string>
+		<string>inference</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Users/ijaegyeong/Library/Application Support/Data Handler/logs/inference.err.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/ijaegyeong/Library/Application Support/Data Handler/logs/inference.out.log</string>
+	<key>ThrottleInterval</key>
+	<integer>15</integer>
+	<key>Umask</key>
+	<integer>63</integer>
+	<key>WorkingDirectory</key>
+	<string>/Users/ijaegyeong/Documents/data_handler</string>
+</dict>
+</plist>

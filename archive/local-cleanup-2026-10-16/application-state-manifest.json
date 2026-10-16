@@ -6,8 +6,8 @@
   },
   {
     "path": "logs/agent.err.log",
-    "bytes": 71276242,
-    "sha256": "92abdd72474894d5f2ade3d53b1f3c32cb56637b645f333dd105b941e2930394"
+    "bytes": 71276392,
+    "sha256": "1853f71213b413db83d4b00ca8727b3d389f767cf48ea0149a3becafd3c657e5"
   },
   {
     "path": "logs/inference.out.log",
@@ -36,8 +36,8 @@
   },
   {
     "path": "logs/inference.err.log",
-    "bytes": 7349,
-    "sha256": "cffcf525e5f8cb97ffded5ead45d0433c590937e66a584a24f2910cde6d76282"
+    "bytes": 7499,
+    "sha256": "54c485b5dfb899b01d4ad06a513e348a4bba7b8a549190ab9e3ba9afda0a2f76"
   },
   {
     "path": ".pipeline/console-registry.json.lock",
@@ -82,12 +82,12 @@
   {
     "path": ".pipeline/agent/queue.sqlite3-wal",
     "bytes": 4120032,
-    "sha256": "577e0861e021803564726837e3c619d12c5bd232897c13eacd06a042d168bf8e"
+    "sha256": "e7caf42773c8670aa7473ad117d027d29b2703c163910cbdc33340d04cba2ab1"
   },
   {
     "path": ".pipeline/agent/queue.sqlite3-shm",
     "bytes": 32768,
-    "sha256": "d7d6ad921918d79fcc15cdf8a4986d3037cc4b2b8bfa8e9fcc8c739d6f403f52"
+    "sha256": "cf05642e170eb30a5dd6ed25dcd4cc8843053efab5e934924d3bd2d981f3afb8"
   },
   {
     "path": ".pipeline/agent/telegram-token",
